@@ -1,0 +1,139 @@
+# Iceberg Drift Prediction Model Configuration
+
+# Project paths
+paths:
+  raw_data: "data/raw"
+  processed_data: "data/processed"
+  models: "models"
+  output: "output"
+  logs: "logs"
+
+# Data sources
+data_sources:
+  # Sentinel-1 SAR data (via ASF/ESA)
+  sentinel1:
+    enabled: true
+    resolution_m: 40
+    revisit_days: 1
+    bands: ["HH", "HV"]
+
+  # Iceberg tracking database (BYU/NIC)
+  iceberg_database:
+    enabled: true
+    source: "BYU"  # or "NIC"
+    min_length_m: 100
+
+  # Ocean currents (HYCOM/GLORYS/Copernicus)
+  ocean_currents:
+    enabled: true
+    source: "GLORYS12"  # HYCOM, GLORYS12, CMEMS
+    resolution_km: 8
+    depth_levels: [0, 10, 50, 100, 200]
+    variables: ["uo", "vo", "temperature", "salinity"]
+
+  # Wind data (ERA5)
+  wind:
+    enabled: true
+    source: "ERA5"
+    resolution_km: 30
+    variables: ["u10", "v10", "msl"]
+
+  # Sea surface temperature
+  sst:
+    enabled: true
+    source: "OSTIA"
+    resolution_km: 5
+
+  # Bathymetry (IBCSO)
+  bathymetry:
+    enabled: true
+    source: "IBCSO_v2"
+    resolution_m: 500
+
+# Model configuration
+model:
+  # Physics-based drift model
+  physics:
+    # Iceberg shape parameters (typical tabular berg)
+    length_m: 2000
+    width_m: 1000
+    height_m: 300
+    draft_m: 270  # ~90% underwater
+    density_ice: 917  # kg/m3
+    density_seawater: 1028  # kg/m3
+
+    # Drag coefficients
+    Cd_water: 1.0    # Water drag coefficient
+    Cd_air: 1.2      # Air drag coefficient
+    Cw_water: 0.02   # Water skin friction
+    Cw_air: 0.0012   # Air skin friction
+
+    # Coriolis parameter (will be computed from latitude)
+    # f = 2 * omega * sin(lat)
+
+    # Time stepping
+    dt_seconds: 3600  # 1 hour timestep
+
+  # ML correction model (PINN)
+  ml_correction:
+    enabled: true
+    architecture: "LSTM"  # LSTM, GRU, Transformer
+    hidden_dim: 128
+    num_layers: 2
+    dropout: 0.2
+    sequence_length: 24  # hours of history
+    prediction_horizon: 72  # hours to predict
+    learning_rate: 1e-3
+    batch_size: 32
+    epochs: 100
+    early_stopping_patience: 15
+
+    # Physics-informed loss weights
+    loss_weights:
+      data: 1.0
+      physics: 0.5
+      boundary: 0.1
+
+  # Ensemble settings
+  ensemble:
+    enabled: true
+    n_members: 10
+    perturbation_scale: 0.1
+
+# Training configuration
+training:
+  train_split: 0.7
+  val_split: 0.15
+  test_split: 0.15
+  random_seed: 42
+
+  # Cross-validation
+  cv_folds: 5
+  cv_strategy: "time_series"  # or "random"
+
+  # Data augmentation
+  augmentation:
+    enabled: true
+    noise_std: 0.01
+    time_jitter_hours: 3
+
+# Evaluation metrics
+evaluation:
+  metrics:
+    - "rmse"
+    - "mae"
+    - "mape"
+    - "drift_distance_error"
+    - "direction_error"
+    - "along_track_error"
+    - "cross_track_error"
+  bootstrap_samples: 1000
+  confidence_level: 0.95
+
+# Visualization
+visualization:
+  map_projection: "epsg:3031"  # Antarctic Polar Stereographic
+  figure_dpi: 150
+  color_scheme: "viridis"
+  save_animations: true
+  animation_fps: 5

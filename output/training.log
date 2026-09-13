@@ -1,0 +1,32 @@
+2026-09-13 15:27:53,505 - __main__ - INFO - Loaded config from config/settings.yaml
+2026-09-13 15:27:53,505 - __main__ - INFO - ============================================================
+2026-09-13 15:27:53,505 - __main__ - INFO - CREDENTIAL CHECK
+2026-09-13 15:27:53,505 - __main__ - INFO - ============================================================
+2026-09-13 15:27:53,505 - iceberg_drift.data_processing.download - INFO - CDS API credentials found
+2026-09-13 15:27:53,505 - iceberg_drift.data_processing.download - INFO - CMEMS credentials found in ~/.copernicusmarine
+2026-09-13 15:27:53,505 - __main__ - INFO - [OK]      ERA5 (CDS API):        ~/.cdsapirc found
+2026-09-13 15:27:53,505 - __main__ - INFO - [OK]      Copernicus Marine:     logged in
+2026-09-13 15:27:53,505 - __main__ - INFO - ============================================================
+2026-09-13 15:27:53,505 - __main__ - INFO - ============================================================
+2026-09-13 15:27:53,505 - __main__ - INFO - STEP 1: Data Preparation
+2026-09-13 15:27:53,505 - __main__ - INFO - ============================================================
+2026-09-13 15:27:53,505 - __main__ - INFO - Loading iceberg data from source: BYU_LOCAL
+2026-09-13 15:27:53,505 - iceberg_drift.data_processing.download - INFO - Downloading BYU_LOCAL iceberg data from 2015-01-01 to 2015-01-31
+2026-09-13 15:27:53,506 - iceberg_drift.data_processing.download - INFO - Parsing 645 BYU CSV files from /Users/pratiksmac/Downloads/icccy/data/iceberg_positions
+2026-09-13 15:36:06,466 - __main__ - INFO - Loaded config from config/settings.yaml
+2026-09-13 15:36:06,466 - __main__ - INFO - ============================================================
+2026-09-13 15:36:06,466 - __main__ - INFO - CREDENTIAL CHECK
+2026-09-13 15:36:06,466 - __main__ - INFO - ============================================================
+2026-09-13 15:36:06,466 - __main__ - INFO - Using cached real data — skipping credential check
+2026-09-13 15:37:41,098 - __main__ - INFO - Loaded config from config/settings.yaml
+2026-09-13 15:37:41,098 - __main__ - INFO - ============================================================
+2026-09-13 15:37:41,098 - __main__ - INFO - CREDENTIAL CHECK
+2026-09-13 15:37:41,099 - __main__ - INFO - ============================================================
+2026-09-13 15:37:41,099 - __main__ - INFO - Using cached real data — skipping credential check
+2026-09-13 15:37:41,099 - __main__ - INFO - ============================================================
+2026-09-13 15:37:41,099 - __main__ - INFO - STEP 1: Data Preparation
+2026-09-13 15:37:41,099 - __main__ - INFO - ============================================================
+2026-09-13 15:37:41,099 - __main__ - INFO - Loading iceberg data from source: BYU_LOCAL
+2026-09-13 15:37:41,099 - iceberg_drift.data_processing.download - INFO - Loading cached iceberg data from /Users/pratiksmac/Downloads/icccy/data/icebergs_BYU_LOCAL_2015-01-01_2015-01-31.parquet
+2026-09-13 15:37:41,269 - __main__ - INFO - Loaded 315 iceberg position records
+2026-09-13 15:37:41,269 - __main__ - INFO - Downloading ERA5 wind data from 2015-01-01 to 2015-01-31...
