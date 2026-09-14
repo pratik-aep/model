@@ -163,8 +163,9 @@ class IcebergDriftDataset(Dataset):
         # consumers (e.g. DriftValidator._compare_with_physics) have real values to
         # build a physics baseline from instead of silently defaulting to zero.
         for env_col in ("current_uo", "current_vo", "wind_u10", "wind_v10"):
-            if env_col in traj_df.columns:
-                meta[env_col] = last_row[env_col]
+            raw_col = f"raw_{env_col}"
+            if raw_col in traj_df.columns:
+                meta[raw_col] = last_row[raw_col]
 
         return {
             "x": x,

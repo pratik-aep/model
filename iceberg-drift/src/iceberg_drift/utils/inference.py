@@ -273,6 +273,9 @@ class DriftPredictor:
         for col in expected_features:
             if col not in df.columns:
                 df[col] = 0.0
+                
+        # Fill any NaNs created by lag features on short sequences
+        df = df.fillna(0.0)
 
         # Select and order features - use restored feature_cols if available
         if self.feature_cols is not None:

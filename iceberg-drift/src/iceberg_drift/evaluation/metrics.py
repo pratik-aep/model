@@ -142,30 +142,54 @@ def drift_distance_error(
     Returns:
         (distance_error_km, direction_error_deg)
     """
-    # True drift vector
-    true_dlat = true_lat - init_lat
-    true_dlon = true_lon - init_lon
-
-    true_dist_km = np.sqrt(
-        (true_dlat * 111.0)**2 +
-        (true_dlon * 111.0 * np.cos(np.deg2rad(init_lat)))**2
+    # NaN Check
+    nan_mask = (
+        np.isnan(pred_lat) | np.isnan(pred_lon) |
+        np.isnan(true_lat) | np.isnan(true_lon) |
+        np.isnan(init_lat) | np.isnan(init_lon)
     )
-    true_dir = np.degrees(np.arctan2(true_dlon, true_dlat)) % 360
+    
+    if np.any(nan_mask):
+        nan_count = int(np.sum(nan_mask))
+        logger.warning(
+            f"drift_distance_error: {nan_count} samples contain NaN values and will be excluded. "
+            f"This is likely due to a windowing edge case at the start/end of a short trajectory."
+        )
+        
+    valid = ~nan_mask
+    
+    # Initialize outputs
+    dist_error = np.full_like(pred_lat, np.nan)
+    dir_error = np.full_like(pred_lat, np.nan)
+    
+    if np.any(valid):
+        # True drift vector
+        true_dlat = true_lat[valid] - init_lat[valid]
+        true_dlon = true_lon[valid] - init_lon[valid]
 
-    # Predicted drift vector
-    pred_dlat = pred_lat - init_lat
-    pred_dlon = pred_lon - init_lon
+        true_dist_km = np.sqrt(
+            (true_dlat * 111.0)**2 +
+            (true_dlon * 111.0 * np.cos(np.deg2rad(init_lat[valid])))**2
+        )
+        true_dir = np.degrees(np.arctan2(true_dlon, true_dlat)) % 360
 
-    pred_dist_km = np.sqrt(
-        (pred_dlat * 111.0)**2 +
-        (pred_dlon * 111.0 * np.cos(np.deg2rad(init_lat)))**2
-    )
-    pred_dir = np.degrees(np.arctan2(pred_dlon, pred_dlat)) % 360
+        # Predicted drift vector
+        pred_dlat = pred_lat[valid] - init_lat[valid]
+        pred_dlon = pred_lon[valid] - init_lon[valid]
 
-    # Errors
-    dist_error = pred_dist_km - true_dist_km
-    dir_diff = np.abs(pred_dir - true_dir)
-    dir_error = np.minimum(dir_diff, 360 - dir_diff)
+        pred_dist_km = np.sqrt(
+            (pred_dlat * 111.0)**2 +
+            (pred_dlon * 111.0 * np.cos(np.deg2rad(init_lat[valid])))**2
+        )
+        pred_dir = np.degrees(np.arctan2(pred_dlon, pred_dlat)) % 360
+
+        # Errors
+        dist_err = pred_dist_km - true_dist_km
+        dir_diff = np.abs(pred_dir - true_dir)
+        dir_err = np.minimum(dir_diff, 360 - dir_diff)
+        
+        dist_error[valid] = dist_err
+        dir_error[valid] = dir_err
 
     return dist_error, dir_error
 
@@ -227,6 +251,7 @@ def compute_all_metrics(
     targets: Dict[str, np.ndarray],
     metadata: List[Dict],
     horizon_hours: List[int] = None,
+    time_step_hours: float = 6.0,
 ) -> DriftMetrics:
     """
     Compute comprehensive drift prediction metrics.
@@ -254,12 +279,16 @@ def compute_all_metrics(
         true_u = targets['u']
         true_v = targets['v']
 
-        # Integrate to get positions (simplified)
-        pred_lat = pred_u  # placeholder
-        pred_lon = pred_v
-        true_lat = true_u
-        true_lon = true_v
+        # We cannot safely integrate to absolute positions without precise step-by-step
+        # initial coordinates which aren't fully available in metadata. 
+        # Instead, we will calculate position error directly from the velocity vector differences.
+        pred_lat = np.zeros_like(pred_u)
+        pred_lon = np.zeros_like(pred_u)
+        true_lat = np.zeros_like(true_u)
+        true_lon = np.zeros_like(true_u)
+        velocity_mode = True
     else:
+        velocity_mode = False
         raise ValueError("Predictions must contain either (lat, lon) or (u, v)")
 
     # Flatten for overall metrics
@@ -269,7 +298,18 @@ def compute_all_metrics(
     true_lon_flat = true_lon.flatten()
 
     # Position errors
-    pos_errors = position_error_km(pred_lat_flat, pred_lon_flat, true_lat_flat, true_lon_flat)
+    if velocity_mode:
+        pred_u_flat = pred_u.flatten()
+        pred_v_flat = pred_v.flatten()
+        true_u_flat = true_u.flatten()
+        true_v_flat = true_v.flatten()
+        # Distance = velocity * dt. Calculate based on sequence length.
+        horizon_steps = pred_u.shape[1] if len(pred_u.shape) > 1 else 1
+        dt_seconds = horizon_steps * time_step_hours * 3600.0
+        vel_diff_mag = np.sqrt((pred_u_flat - true_u_flat)**2 + (pred_v_flat - true_v_flat)**2)
+        pos_errors = vel_diff_mag * dt_seconds / 1000.0  # km
+    else:
+        pos_errors = position_error_km(pred_lat_flat, pred_lon_flat, true_lat_flat, true_lon_flat)
 
     # Velocity errors (if available)
     if 'u' in predictions:
@@ -295,10 +335,45 @@ def compute_all_metrics(
         init_lats = np.repeat(init_lats, n_per_traj)
         init_lons = np.repeat(init_lons, n_per_traj)
 
-    drift_dist_err, drift_dir_err = drift_distance_error(
-        pred_lat_flat, pred_lon_flat, true_lat_flat, true_lon_flat,
-        init_lats, init_lons
-    )
+    if velocity_mode:
+        # Compute drift distance/direction by integrating velocities over the horizon
+        dt_seconds_per_step = time_step_hours * 3600.0
+        # Sum over horizon axis to get total displacement
+        if len(pred_u.shape) > 1:
+            pred_dy = np.sum(pred_v, axis=1) * dt_seconds_per_step
+            pred_dx = np.sum(pred_u, axis=1) * dt_seconds_per_step
+            true_dy = np.sum(true_v, axis=1) * dt_seconds_per_step
+            true_dx = np.sum(true_u, axis=1) * dt_seconds_per_step
+        else:
+            pred_dy = pred_v * dt_seconds_per_step
+            pred_dx = pred_u * dt_seconds_per_step
+            true_dy = true_v * dt_seconds_per_step
+            true_dx = true_u * dt_seconds_per_step
+            
+        pred_dist = np.sqrt(pred_dx**2 + pred_dy**2) / 1000.0  # km
+        true_dist = np.sqrt(true_dx**2 + true_dy**2) / 1000.0  # km
+        pred_dir = np.degrees(np.arctan2(pred_dx, pred_dy)) % 360
+        true_dir = np.degrees(np.arctan2(true_dx, true_dy)) % 360
+        
+        drift_dist_err = pred_dist - true_dist
+        dir_diff = np.abs(pred_dir - true_dir)
+        drift_dir_err = np.minimum(dir_diff, 360 - dir_diff)
+        
+        # Flatten if necessary (though they might already be flat if horizon wasn't a separate dim)
+        drift_dist_err = drift_dist_err.flatten()
+        drift_dir_err = drift_dir_err.flatten()
+        
+        # Ensure they match the length of pos_errors by repeating them for each step in horizon if pos_errors is flattened across time
+        if len(drift_dist_err) != len(pos_errors):
+            horizon_steps = pred_u.shape[1] if len(pred_u.shape) > 1 else 1
+            drift_dist_err = np.repeat(drift_dist_err, horizon_steps)
+            drift_dir_err = np.repeat(drift_dir_err, horizon_steps)
+
+    else:
+        drift_dist_err, drift_dir_err = drift_distance_error(
+            pred_lat_flat, pred_lon_flat, true_lat_flat, true_lon_flat,
+            init_lats, init_lons
+        )
 
     # Along/cross track (using previous position as reference)
     if 'prev_lat' in metadata[0] and 'prev_lon' in metadata[0]:
@@ -310,32 +385,52 @@ def compute_all_metrics(
             ref_lats = np.repeat(ref_lats, n_per_traj)
             ref_lons = np.repeat(ref_lons, n_per_traj)
 
-        along_err, cross_err = along_cross_track_error(
-            pred_lat_flat, pred_lon_flat, true_lat_flat, true_lon_flat,
-            ref_lats, ref_lons
-        )
-        mean_along = float(np.mean(along_err))
-        mean_cross = float(np.mean(cross_err))
-        rmse_along = float(np.sqrt(np.mean(along_err**2)))
-        rmse_cross = float(np.sqrt(np.mean(cross_err**2)))
+        if velocity_mode:
+            mean_along = mean_cross = rmse_along = rmse_cross = np.nan
+        else:
+            along_err, cross_err = along_cross_track_error(
+                pred_lat_flat, pred_lon_flat, true_lat_flat, true_lon_flat,
+                ref_lats, ref_lons
+            )
+            mean_along = float(np.mean(along_err))
+            mean_cross = float(np.mean(cross_err))
+            rmse_along = float(np.sqrt(np.mean(along_err**2)))
+            rmse_cross = float(np.sqrt(np.mean(cross_err**2)))
     else:
         mean_along = mean_cross = rmse_along = rmse_cross = np.nan
 
     # Skill scores
-    skill_persist = _compute_skill_score(pred_lat, pred_lon, true_lat, true_lon, metadata, "persistence")
-    skill_physics = _compute_skill_score(pred_lat, pred_lon, true_lat, true_lon, metadata, "physics")
+    # BUG-013 Fix: Calculate real skill scores in velocity mode
+    if velocity_mode:
+        skill_persist = _compute_skill_score(pos_errors, true_u_flat, true_v_flat, metadata, "persistence", velocity_mode=True, dt_seconds=dt_seconds)
+        skill_physics = _compute_skill_score(pos_errors, true_u_flat, true_v_flat, metadata, "physics", velocity_mode=True, dt_seconds=dt_seconds)
+    else:
+        # Fallback to a default dt_seconds for non-velocity mode baseline
+        horizon_max = max(horizon_hours) if horizon_hours else 36
+        dt_seconds_for_skill = horizon_max * 3600.0
+        skill_persist = _compute_skill_score(pos_errors, true_lat_flat, true_lon_flat, metadata, "persistence", velocity_mode=False, dt_seconds=dt_seconds_for_skill)
+        skill_physics = _compute_skill_score(pos_errors, true_lat_flat, true_lon_flat, metadata, "physics", velocity_mode=False, dt_seconds=dt_seconds_for_skill)
 
     # Per-horizon metrics
     horizon_metrics = {}
     if horizon_hours is not None and len(pred_lat.shape) >= 2:
         for h_idx, horizon in enumerate(horizon_hours):
             if h_idx < pred_lat.shape[1]:
-                h_pred_lat = pred_lat[:, h_idx]
-                h_pred_lon = pred_lon[:, h_idx]
-                h_true_lat = true_lat[:, h_idx]
-                h_true_lon = true_lon[:, h_idx]
+                if velocity_mode:
+                    h_pred_u = pred_u[:, h_idx]
+                    h_pred_v = pred_v[:, h_idx]
+                    h_true_u = true_u[:, h_idx]
+                    h_true_v = true_v[:, h_idx]
+                    h_dt_seconds = (h_idx + 1) * time_step_hours * 3600.0
+                    h_vel_diff = np.sqrt((h_pred_u - h_true_u)**2 + (h_pred_v - h_true_v)**2)
+                    h_pos_err = h_vel_diff * h_dt_seconds / 1000.0
+                else:
+                    h_pred_lat = pred_lat[:, h_idx]
+                    h_pred_lon = pred_lon[:, h_idx]
+                    h_true_lat = true_lat[:, h_idx]
+                    h_true_lon = true_lon[:, h_idx]
+                    h_pos_err = position_error_km(h_pred_lat, h_pred_lon, h_true_lat, h_true_lon)
 
-                h_pos_err = position_error_km(h_pred_lat, h_pred_lon, h_true_lat, h_true_lon)
                 horizon_metrics[horizon] = {
                     "mean_position_error_km": float(np.mean(h_pos_err)),
                     "rmse_position_km": float(np.sqrt(np.mean(h_pos_err**2))),
@@ -352,8 +447,8 @@ def compute_all_metrics(
         rmse_speed=rmse_speed,
         mean_direction_error_deg=mean_dir_error,
         median_direction_error_deg=median_dir_error,
-        mean_drift_distance_error_km=float(np.mean(drift_dist_err)),
-        mean_drift_direction_error_deg=float(np.mean(drift_dir_err)),
+        mean_drift_distance_error_km=float(np.nanmean(drift_dist_err)) if not np.all(np.isnan(drift_dist_err)) else np.nan,
+        mean_drift_direction_error_deg=float(np.nanmean(drift_dir_err)) if not np.all(np.isnan(drift_dir_err)) else np.nan,
         mean_along_track_error_km=mean_along,
         mean_cross_track_error_km=mean_cross,
         rmse_along_track_km=rmse_along,
@@ -365,43 +460,45 @@ def compute_all_metrics(
 
 
 def _compute_skill_score(
-    pred_lat: np.ndarray,
-    pred_lon: np.ndarray,
-    true_lat: np.ndarray,
-    true_lon: np.ndarray,
+    model_errors: np.ndarray,
+    true_val1: np.ndarray,
+    true_val2: np.ndarray,
     metadata: List[Dict],
     baseline: str,
+    velocity_mode: bool = False,
+    dt_seconds: float = 3600.0,
 ) -> float:
     """
     Compute skill score relative to baseline.
 
     Skill = 1 - (model_error / baseline_error)
     """
-    # Flatten arrays for overall skill score
-    pred_lat_flat = pred_lat.flatten()
-    pred_lon_flat = pred_lon.flatten()
-    true_lat_flat = true_lat.flatten()
-    true_lon_flat = true_lon.flatten()
-
-    model_errors = position_error_km(pred_lat_flat, pred_lon_flat, true_lat_flat, true_lon_flat)
+    if len(model_errors) == 0:
+        return np.nan
 
     if baseline == "persistence":
-        # Persistence: iceberg stays at current position
-        # Use initial position as persistence forecast
-        init_lats = np.array([m.get('init_lat', true_lat_flat[0]) for m in metadata])
-        init_lons = np.array([m.get('init_lon', true_lon_flat[0]) for m in metadata])
+        if velocity_mode:
+            # Persistence in velocity mode means predicting 0 velocity (it stays at initial pos)
+            # true_val1/2 are true_u/true_v. Distance error is magnitude of true velocity * time
+            vel_diff_mag = np.sqrt((0.0 - true_val1)**2 + (0.0 - true_val2)**2)
+            baseline_errors = vel_diff_mag * dt_seconds / 1000.0
+        else:
+            # Persistence: iceberg stays at current position
+            # Use initial position as persistence forecast
+            init_lats = np.array([m.get('init_lat', true_val1[0]) for m in metadata])
+            init_lons = np.array([m.get('init_lon', true_val2[0]) for m in metadata])
 
-        if len(init_lats) != len(model_errors):
-            n_per_traj = len(model_errors) // len(init_lats)
-            init_lats = np.repeat(init_lats, n_per_traj)
-            init_lons = np.repeat(init_lons, n_per_traj)
+            if len(init_lats) != len(model_errors):
+                n_per_traj = len(model_errors) // len(init_lats)
+                init_lats = np.repeat(init_lats, n_per_traj)
+                init_lons = np.repeat(init_lons, n_per_traj)
 
-        baseline_errors = position_error_km(init_lats, init_lons, true_lat_flat, true_lon_flat)
+            baseline_errors = position_error_km(init_lats, init_lons, true_val1, true_val2)
 
     elif baseline == "physics":
         # Physics baseline: current + wind_factor * wind + Coriolis correction
         # Extract environmental forcings from metadata
-        n_samples = len(pred_lat_flat)
+        n_samples = len(model_errors)
         if n_samples == 0:
             return np.nan
 
@@ -447,52 +544,39 @@ def _compute_skill_score(
                      wind_factor * wind_v -
                      hem_sign * coriolis_alpha * wind_u)
 
-        # Convert physics velocity predictions to position errors
-        # We need to integrate velocity to position to compare with true positions
-        # For simplicity, we'll assume small time steps and compute approximate position
-        # In a full implementation, we would integrate over the prediction horizon
+        if velocity_mode:
+            # BUG-014 Fix: Delete dead code assigning pred_u_flat, pred_v_flat. Use dt_seconds passed as argument for Euler integration.
+            vel_diff_mag = np.sqrt((physics_u - true_val1)**2 + (physics_v - true_val2)**2)
+            baseline_errors = vel_diff_mag * dt_seconds / 1000.0
+        else:
+            # Initialize arrays for physics-predicted positions
+            physics_lats = np.zeros_like(model_errors)
+            physics_lons = np.zeros_like(model_errors)
 
-        # For now, compute velocity error and convert to approximate position error
-        # This is not perfect but better than the fake 1.2 multiplier
-        pred_u_flat = pred_lat_flat  # This is wrong - we don't have u/v predictions here
-        pred_v_flat = pred_lon_flat  # This is wrong - we don't have u/v predictions here
+            # Use initial positions from metadata
+            init_lats = np.array([m.get('init_lat', 0.0) for m in metadata])
+            init_lons = np.array([m.get('init_lon', 0.0) for m in metadata])
 
-        # Since we're in the position branch of compute_all_metrics, we have lat/lon predictions
-        # To compute physics baseline for position, we need to integrate physics velocity
-        # Let's compute a simplified position error based on velocity error
+            # Expand initial positions to match prediction shape if needed
+            if len(init_lats) != n_samples:
+                n_per = n_samples // len(init_lats)
+                if n_per > 0:
+                    init_lats = np.repeat(init_lats, n_per)
+                    init_lons = np.repeat(init_lons, n_per)
+                else:
+                    init_lats = np.zeros(n_samples)
+                    init_lons = np.zeros(n_samples)
 
-        # Actually, let's compute the physics baseline position by integrating
-        # We'll assume a 1-hour timestep for simplicity (matching trainer.py assumption)
-        dt_seconds = 3600.0  # 1 hour
+            # Integrate physics velocity to get physics-predicted positions
+            # This is a simplified Euler integration
+            physics_lats = init_lats + (physics_v * dt_seconds) / 111000.0
+            physics_lons = init_lons + (physics_u * dt_seconds) / (111000.0 * np.cos(np.radians(init_lats)))
 
-        # Initialize arrays for physics-predicted positions
-        physics_lats = np.zeros_like(pred_lat_flat)
-        physics_lons = np.zeros_like(pred_lon_flat)
+            # Wrap longitude to [-180, 180]
+            physics_lons = ((physics_lons + 180) % 360) - 180
 
-        # Use initial positions from metadata
-        init_lats = np.array([m.get('init_lat', 0.0) for m in metadata])
-        init_lons = np.array([m.get('init_lon', 0.0) for m in metadata])
-
-        # Expand initial positions to match prediction shape if needed
-        if len(init_lats) != n_samples:
-            n_per = n_samples // len(init_lats)
-            if n_per > 0:
-                init_lats = np.repeat(init_lats, n_per)
-                init_lons = np.repeat(init_lons, n_per)
-            else:
-                init_lats = np.zeros(n_samples)
-                init_lons = np.zeros(n_samples)
-
-        # Integrate physics velocity to get physics-predicted positions
-        # This is a simplified Euler integration
-        physics_lats = init_lats + (physics_v * dt_seconds) / 111000.0
-        physics_lons = init_lons + (physics_u * dt_seconds) / (111000.0 * np.cos(np.radians(init_lats)))
-
-        # Wrap longitude to [-180, 180]
-        physics_lons = ((physics_lons + 180) % 360) - 180
-
-        # Compute position error between physics baseline and true positions
-        baseline_errors = position_error_km(physics_lats, physics_lons, true_lat_flat, true_lon_flat)
+            # Compute position error between physics baseline and true positions
+            baseline_errors = position_error_km(physics_lats, physics_lons, true_val1, true_val2)
     else:
         return np.nan
 

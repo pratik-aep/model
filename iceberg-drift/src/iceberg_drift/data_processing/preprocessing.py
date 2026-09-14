@@ -485,8 +485,21 @@ def split_trajectories(
         iceberg_ids = df["iceberg_id"].unique()
         np.random.shuffle(iceberg_ids)
 
-        n_train = int(len(iceberg_ids) * train_frac)
-        n_val = int(len(iceberg_ids) * val_frac)
+        # BUG-011 Fix: Ensure validation and test sets are never empty if we have >= 3 unique icebergs
+        num_icebergs = len(iceberg_ids)
+        if num_icebergs >= 3:
+            n_val = max(1, int(num_icebergs * val_frac))
+            n_test = max(1, int(num_icebergs * test_frac))
+            n_train = num_icebergs - n_val - n_test
+            if n_train < 1:
+                n_train = 1
+                n_val = max(1, (num_icebergs - 1) // 2)
+                n_test = num_icebergs - n_train - n_val
+        elif num_icebergs > 0:
+            logger.warning(f"Only {num_icebergs} unique icebergs found. Falling back to time-based split.")
+            return split_trajectories(df, train_frac, val_frac, test_frac, random_seed, strategy="time")
+        else:
+            n_train = n_val = n_test = 0
 
         train_ids = set(iceberg_ids[:n_train])
         val_ids = set(iceberg_ids[n_train:n_train + n_val])
@@ -500,8 +513,20 @@ def split_trajectories(
         # Split by time (chronological)
         df = df.sort_values("datetime").reset_index(drop=True)
         n = len(df)
-        n_train = int(n * train_frac)
-        n_val = int(n * val_frac)
+        
+        # Optional Cleanup: Guarantee minimum 1 row per split if n >= 3
+        if n >= 3:
+            n_val = max(1, int(n * val_frac))
+            n_test = max(1, int(n * test_frac))
+            n_train = n - n_val - n_test
+            if n_train < 1:
+                n_train = 1
+                n_val = max(1, (n - 1) // 2)
+                n_test = n - n_train - n_val
+        else:
+            n_train = int(n * train_frac)
+            n_val = int(n * val_frac)
+            n_test = n - n_train - n_val
 
         train_df = df.iloc[:n_train].copy()
         val_df = df.iloc[n_train:n_train + n_val].copy()
@@ -525,7 +550,7 @@ def split_trajectories(
 def get_feature_columns(df: pd.DataFrame, exclude_prefixes: List[str] = None) -> List[str]:
     """Get list of feature columns (non-target, non-metadata)."""
     if exclude_prefixes is None:
-        exclude_prefixes = ["target_", "iceberg_id", "datetime", "lat", "lon"]
+        exclude_prefixes = ["target_", "iceberg_id", "datetime", "lat", "lon", "raw_"]
 
     feature_cols = []
     for col in df.columns:

@@ -104,7 +104,7 @@ def download_iceberg_positions(
     logger.info(f"Downloading {source} iceberg data from {start_date} to {end_date}")
 
     if source == "NIC":
-        df = _download_nic_icebergs(start_date, end_date, min_length_m)
+        df = _download_nic_icebergs(start_date, end_date, min_length_m, local_path)
     elif source == "BYU":
         df = _download_byu_icebergs(start_date, end_date, min_length_m)
     elif source == "BYU_LOCAL":
@@ -235,7 +235,7 @@ def _load_byu_local_icebergs(
     if not data_path.exists():
         raise FileNotFoundError(f"Local BYU data directory not found: {data_dir}")
 
-    csv_files = list(data_path.glob("*.csv"))
+    csv_files = list(data_path.rglob("*.csv"))
     if not csv_files:
         raise FileNotFoundError(f"No CSV files found in {data_dir}")
 
@@ -304,30 +304,79 @@ def _download_nic_icebergs(
     start_date: str,
     end_date: str,
     min_length_m: int,
+    local_path: Optional[str] = None
 ) -> pd.DataFrame:
     """
-    Download from US National Ice Center (NIC) weekly iceberg reports.
-
-    NIC publishes weekly iceberg position reports at:
-    https://www.natice.noaa.gov/pub/icebergs/
-
-    Format: CSV with columns for iceberg ID, lat, lon, length, width, date
+    Parse local US National Ice Center (NIC) iceberg reports.
     """
-    base_url = "https://www.natice.noaa.gov/pub/icebergs/"
+    if local_path is None:
+        local_path = "/Users/pratiksmac/Downloads/data/raw/iceberg_positions/iceberg_positions"
+    data_path = Path(local_path)
+    if not data_path.exists():
+        logger.warning(f"NIC local path not found: {local_path}. Using synthetic.")
+        return _generate_synthetic_icebergs(start_date, end_date, min_length_m, source="NIC")
+    
+    csv_files = list(data_path.rglob("*.csv"))
+    if not csv_files:
+        logger.warning(f"No CSVs found in NIC path: {local_path}. Using synthetic.")
+        return _generate_synthetic_icebergs(start_date, end_date, min_length_m, source="NIC")
+        
+    logger.info(f"Parsing {len(csv_files)} NIC CSV files from {local_path}")
 
     start = pd.Timestamp(start_date)
     end = pd.Timestamp(end_date)
+    records = []
 
-    # NIC provides weekly files
-    # For full implementation, would need to:
-    # 1. List available weekly files
-    # 2. Download and parse each CSV
-    # 3. Combine into single DataFrame
+    for csv_file in tqdm(csv_files, desc="Parsing NIC Data"):
+        try:
+            df = pd.read_csv(csv_file)
+        except Exception:
+            continue
+            
+        for _, row in df.iterrows():
+            try:
+                dt = pd.to_datetime(row['date'])
+            except:
+                continue
+                
+            if dt < start or dt > end:
+                continue
+                
+            length_m, width_m = np.nan, np.nan
+            if 'size_1' in row and not pd.isna(row['size_1']) and float(row['size_1']) > 0:
+                length_m = float(row['size_1']) * 1852.0
+            if 'size_2' in row and not pd.isna(row['size_2']) and float(row['size_2']) > 0:
+                width_m = float(row['size_2']) * 1852.0
+                
+            lat, lon = np.nan, np.nan
+            if 'nic_1' in row and 'nic_2' in row:
+                lat_val, lon_val = float(row['nic_1']), float(row['nic_2'])
+                if lat_val != 0.0 and lon_val != 0.0 and not np.isnan(lat_val):
+                    lat, lon = lat_val, lon_val
+            
+            if np.isnan(lat) and 'lat' in row and 'lon' in row:
+                lat_val, lon_val = float(row['lat']), float(row['lon'])
+                if lat_val != 0.0 and lon_val != 0.0 and not np.isnan(lat_val):
+                    lat, lon = lat_val, lon_val
+                        
+            if not np.isnan(lat) and (np.isnan(length_m) or length_m >= min_length_m):
+                records.append({
+                    'iceberg_id': f"NIC_{csv_file.stem.upper()}",
+                    'datetime': dt,
+                    'lat': lat,
+                    'lon': lon,
+                    'length_m': length_m,
+                    'width_m': width_m
+                })
 
-    logger.warning("NIC download uses synthetic data - implement full NIC parser for production")
-    logger.info("To implement: parse weekly CSV files from https://www.natice.noaa.gov/pub/icebergs/")
+    if not records:
+        logger.warning(f"No valid NIC data loaded for given dates. Using synthetic.")
+        return _generate_synthetic_icebergs(start_date, end_date, min_length_m, source="NIC")
 
-    return _generate_synthetic_icebergs(start_date, end_date, min_length_m, source="NIC")
+    combined = pd.DataFrame(records)
+    combined = combined.sort_values(['iceberg_id', 'datetime']).reset_index(drop=True)
+    logger.info(f"Loaded {len(combined)} valid NIC records")
+    return combined
 
 
 def _download_byu_icebergs(
@@ -425,12 +474,12 @@ def download_era5_wind(
     except ImportError:
         logger.warning("cdsapi not installed. Install with: pip install cdsapi")
         if not allow_synthetic_fallback: raise
-        return _generate_synthetic_era5(start_date, end_date, bboxes[0], variables)
+        return _generate_synthetic_era5(start_date, end_date, bboxes, variables)
     except Exception as e:
         if not allow_synthetic_fallback:
             raise RuntimeError(f"ERA5 download failed: {e}") from e
         logger.warning(f"ERA5 download failed: {e}. Generating synthetic data.")
-        return _generate_synthetic_era5(start_date, end_date, bboxes[0], variables)
+        return _generate_synthetic_era5(start_date, end_date, bboxes, variables)
 
 
 def download_copernicus_currents(
@@ -515,12 +564,12 @@ def download_copernicus_currents(
         logger.warning("copernicusmarine not installed.")
         if not allow_synthetic_fallback:
             raise RuntimeError(f"Copernicus download failed: {e}") from e
-        return _generate_synthetic_currents(start_date, end_date, bboxes[0], depth_levels, variables)
+        return _generate_synthetic_currents(start_date, end_date, bboxes, depth_levels, variables)
     except Exception as e:
         if not allow_synthetic_fallback:
             raise RuntimeError(f"Copernicus download failed: {e}") from e
         logger.warning(f"Copernicus download failed: {e}. Generating synthetic data.")
-        return _generate_synthetic_currents(start_date, end_date, bboxes[0], depth_levels, variables)
+        return _generate_synthetic_currents(start_date, end_date, bboxes, depth_levels, variables)
 def download_bathymetry(
     output_dir: str = "data/raw/bathymetry",
     bbox: Tuple[float, float, float, float] = (-180, -80, 180, -50),
@@ -738,7 +787,7 @@ def _simulate_iceberg_trajectory(
 def _generate_synthetic_era5(
     start_date: str,
     end_date: str,
-    bbox: Tuple[float, float, float, float],
+    bboxes: List[Tuple[float, float, float, float]],
     variables: List[str],
 ) -> xr.Dataset:
     """Generate synthetic ERA5-like data for development."""
@@ -748,8 +797,16 @@ def _generate_synthetic_era5(
     end = pd.Timestamp(end_date)
     times = pd.date_range(start, end, freq="6h")
 
-    lats = np.arange(bbox[1], bbox[3], 0.25)  # 0.25 deg resolution
-    lons = np.arange(bbox[0], bbox[2], 0.25)
+    union_min_lon = min(b[0] for b in bboxes)
+    union_min_lat = min(b[1] for b in bboxes)
+    union_max_lon = max(b[2] for b in bboxes)
+    union_max_lat = max(b[3] for b in bboxes)
+    
+    lon_span = union_max_lon - union_min_lon
+    res = 0.25 if lon_span < 90 else 2.0
+
+    lats = np.arange(union_min_lat, union_max_lat, res)
+    lons = np.arange(union_min_lon, union_max_lon, res)
 
     data_vars = {}
     for var in variables:
@@ -785,7 +842,7 @@ def _generate_synthetic_era5(
 def _generate_synthetic_currents(
     start_date: str,
     end_date: str,
-    bbox: Tuple[float, float, float, float],
+    bboxes: List[Tuple[float, float, float, float]],
     depth_levels: List[float],
     variables: List[str],
 ) -> xr.Dataset:
@@ -796,8 +853,16 @@ def _generate_synthetic_currents(
     end = pd.Timestamp(end_date)
     times = pd.date_range(start, end, freq="D")  # Daily
 
-    lats = np.arange(bbox[1], bbox[3], 0.08)  # ~8km resolution
-    lons = np.arange(bbox[0], bbox[2], 0.08)
+    union_min_lon = min(b[0] for b in bboxes)
+    union_min_lat = min(b[1] for b in bboxes)
+    union_max_lon = max(b[2] for b in bboxes)
+    union_max_lat = max(b[3] for b in bboxes)
+
+    lon_span = union_max_lon - union_min_lon
+    res = 0.08 if lon_span < 90 else 1.0
+
+    lats = np.arange(union_min_lat, union_max_lat, res)
+    lons = np.arange(union_min_lon, union_max_lon, res)
 
     data_vars = {}
     for var in variables:

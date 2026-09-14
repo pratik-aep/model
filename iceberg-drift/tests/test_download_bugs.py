@@ -90,3 +90,22 @@ def test_bug3_date_range_validation():
     # Requested range outside cache -> raises ValueError
     with pytest.raises(ValueError, match="does not cover requested range"):
         _validate_date_range(ds, "2018-01-01", "2020-12-31")
+
+def test_synthetic_fallback_multi_chunk():
+    """Verify that synthetic fallback generates data covering ALL bboxes, not just the first one."""
+    df = pd.DataFrame({
+        "lon": [-170, -50, 60, 170],
+        "lat": [-60, -65, -70, -60]
+    })
+    bboxes = get_chunked_bboxes(df, buffer=5.0, band_width=30.0)
+    assert len(bboxes) == 4
+    
+    from iceberg_drift.data_processing.download import _generate_synthetic_era5
+    ds = _generate_synthetic_era5("2020-01-01", "2020-01-02", bboxes, ["u10"])
+    
+    min_lon = ds.longitude.values.min()
+    max_lon = ds.longitude.values.max()
+    
+    assert min_lon <= -170
+    assert max_lon >= 170
+

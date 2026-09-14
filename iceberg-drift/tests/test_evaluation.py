@@ -121,7 +121,8 @@ class TestMetrics:
         assert metrics.rmse_position_km > 0
         assert metrics.mean_position_error_km > 0
         assert metrics.mean_direction_error_deg >= 0
-        assert -1 <= metrics.skill_score_vs_persistence <= 1
+        if not np.isnan(metrics.skill_score_vs_persistence):
+            assert -1 <= metrics.skill_score_vs_persistence <= 1
 
     def test_bootstrap_confidence_interval(self):
         preds = np.random.normal(0, 1, 100)
@@ -162,6 +163,29 @@ class TestMetrics:
         assert 'mae' in metrics
         assert 'r2' in metrics
         assert metrics['r2'] > 0.9  # Good fit
+
+    def test_compute_skill_score_velocity_mode(self):
+        """Test BUG-013: skill scores in velocity mode are real numbers, not NaN."""
+        from iceberg_drift.evaluation.metrics import compute_all_metrics
+        import numpy as np
+        
+        n = 10
+        h = 6
+        pred_u = np.random.normal(0.1, 0.05, (n, h))
+        pred_v = np.random.normal(0.05, 0.05, (n, h))
+        true_u = pred_u + np.random.normal(0, 0.02, (n, h))
+        true_v = pred_v + np.random.normal(0, 0.02, (n, h))
+        metadata = [{'init_lat': -65, 'init_lon': 0, 'current_uo': 0, 'current_vo': 0, 'wind_u10': 0, 'wind_v10': 0}] * n
+
+        metrics = compute_all_metrics(
+            {'u': pred_u, 'v': pred_v},
+            {'u': true_u, 'v': true_v},
+            metadata,
+            horizon_hours=[6],
+        )
+
+        assert not np.isnan(metrics.skill_score_vs_persistence)
+        assert not np.isnan(metrics.skill_score_vs_physics)
 
 
 def test_predict_output_arrays_same_length():

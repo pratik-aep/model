@@ -372,7 +372,16 @@ class DriftValidator:
         """Save metrics to file."""
         import json
 
-        metrics_dict = {
+        def convert_types(obj):
+            if isinstance(obj, np.generic):
+                return obj.item()
+            elif isinstance(obj, dict):
+                return {k: convert_types(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_types(i) for i in obj]
+            return obj
+
+        metrics_dict = convert_types({
             "mean_position_error_km": result.metrics.mean_position_error_km,
             "median_position_error_km": result.metrics.median_position_error_km,
             "rmse_position_km": result.metrics.rmse_position_km,
@@ -392,11 +401,11 @@ class DriftValidator:
                 for k, v in result.bootstrap_ci.items()
             },
             "comparison_results": result.comparison_results,
-        }
+        })
 
         output_file = self.output_dir / "metrics.json"
         with open(output_file, 'w') as f:
-            json.dump(metrics_dict, f, indent=2, default=str)
+            json.dump(metrics_dict, f, indent=2)
         logger.info(f"Metrics saved to {output_file}")
 
     def _save_predictions(self, result: ValidationResult):
@@ -431,8 +440,17 @@ class DriftValidator:
             fig = plt.figure(figsize=(15, 10))
             ax = fig.add_subplot(1, 1, 1, projection=ccrs.SouthPolarStereo())
             ax.set_extent([-180, 180, -90, -50], crs=ccrs.PlateCarree())
-            ax.add_feature(cfeature.LAND, facecolor='lightgray')
-            ax.add_feature(cfeature.COASTLINE)
+            
+            # BUG-017 Fix: Scope the unverified context to only cartopy feature download requests
+            # to prevent compromising the global default HTTPS context for other network calls.
+            import ssl
+            default_context = ssl._create_default_https_context
+            try:
+                ssl._create_default_https_context = ssl._create_unverified_context
+                ax.add_feature(cfeature.LAND, facecolor='lightgray')
+                ax.add_feature(cfeature.COASTLINE)
+            finally:
+                ssl._create_default_https_context = default_context
             ax.gridlines(draw_labels=True)
 
             for idx in indices:

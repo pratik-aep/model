@@ -197,31 +197,40 @@ def main():
             min_length_m=iceberg_cfg.min_length_m,
             source="SYNTHETIC",
         )
+        from iceberg_drift.data_processing.download import get_chunked_bboxes
+        bboxes = get_chunked_bboxes(iceberg_df, buffer=5.0)
         logger.info("Generating synthetic ERA5 wind data...")
         wind_ds = _generate_synthetic_era5(
             start_date=iceberg_cfg.start_date,
             end_date=iceberg_cfg.end_date,
-            bbox=wind_bbox,
+            bboxes=bboxes,
             variables=["u10", "v10", "msl"]
         )
         logger.info("Generating synthetic Copernicus current data...")
         current_ds = _generate_synthetic_currents(
             start_date=iceberg_cfg.start_date,
             end_date=iceberg_cfg.end_date,
-            bbox=currents_bbox,
+            bboxes=bboxes,
             depth_levels=[0, 10],
             variables=["uo", "vo", "temperature", "salinity"]
         )
     else:
-        iceberg_df = download_iceberg_positions(
-            output_dir=data_dir,
+        from iceberg_drift.data_processing.download import _load_byu_local_icebergs, _download_nic_icebergs
+        import pandas as pd
+        byu_df = _load_byu_local_icebergs(
+            data_dir=iceberg_cfg.local_path + "/raw/iceberg_positions",
             start_date=iceberg_cfg.start_date,
             end_date=iceberg_cfg.end_date,
             min_length_m=iceberg_cfg.min_length_m,
-            source=iceberg_cfg.source,
-            local_path=iceberg_cfg.get("local_path", None),
         )
-        logger.info(f"Loaded {len(iceberg_df)} iceberg position records")
+        nic_df = _download_nic_icebergs(
+            start_date=iceberg_cfg.start_date,
+            end_date=iceberg_cfg.end_date,
+            min_length_m=iceberg_cfg.min_length_m,
+            local_path=iceberg_cfg.local_path + "/raw/iceberg_positions/iceberg_positions",
+        )
+        iceberg_df = pd.concat([byu_df, nic_df], ignore_index=True)
+        logger.info(f"Loaded {len(iceberg_df)} iceberg position records (BYU + NIC)")
 
         from iceberg_drift.data_processing.download import get_chunked_bboxes
         bboxes = get_chunked_bboxes(iceberg_df, buffer=5.0)
@@ -234,7 +243,8 @@ def main():
             start_date=iceberg_cfg.start_date,
             end_date=iceberg_cfg.end_date,
             bboxes=bboxes,
-            allow_synthetic_fallback=False,
+            variables=["u10", "v10"],
+            allow_synthetic_fallback=True,
         )
         logger.info(f"Downloading Copernicus current data from {iceberg_cfg.start_date} to {iceberg_cfg.end_date}...")
         current_ds = download_copernicus_currents(
@@ -242,7 +252,9 @@ def main():
             start_date=iceberg_cfg.start_date,
             end_date=iceberg_cfg.end_date,
             bboxes=bboxes,
-            allow_synthetic_fallback=False,
+            variables=["uo", "vo"],
+            depth_levels=[0.0],
+            allow_synthetic_fallback=True,
         )
 
     # =============================================================================
@@ -261,8 +273,18 @@ def main():
         fill_coastal_nan=True,
     )
 
+    bathy_cfg = config.data_sources.get('bathymetry', {})
+    bathy_path = bathy_cfg.get('local_path')
+    bathymetry_ds = None
+    if bathy_path and os.path.exists(bathy_path):
+        import xarray as xr
+        bathymetry_ds = xr.open_dataset(bathy_path)
+        if 'z' in bathymetry_ds:
+            bathymetry_ds = bathymetry_ds.rename({'z': 'bathymetry'})
+        logger.info(f"Loaded bathymetry from {bathy_path}")
+
     iceberg_df, wind_ds, current_ds = quality_pipeline.run(
-        iceberg_df, wind_ds, current_ds
+        iceberg_df, wind_ds, current_ds, bathymetry_ds=bathymetry_ds
     )
 
     quality_summary = quality_pipeline.get_summary()
@@ -315,12 +337,12 @@ def main():
     targets_df = create_targets(
         features_df,
         prediction_horizon_hours=prediction_horizon_hours,
-        target_type="position",
+        target_type="velocity",
     )
     logger.info(f"Targets shape: {targets_df.shape}")
 
     # Define target columns for model output dimension
-    target_cols = ['target_lat', 'target_lon']
+    target_cols = ['target_u', 'target_v']
 
     # =============================================================================
     # Step 6: Train/Val/Test Split
@@ -346,6 +368,19 @@ def main():
     logger.info("=" * 60)
     logger.info("STEP 7: Feature Scaling")
     logger.info("=" * 60)
+
+    # Save unscaled copies for physics computation BEFORE scaling
+    # so we don't feed z-scores into the physics equations
+    raw_env_cols = ['wind_u10', 'wind_v10', 'current_uo', 'current_vo']
+    for lag in ['_lag6h', '_lag12h', '_lag24h', '_lag48h']:
+        raw_env_cols.extend([f"wind_u10{lag}", f"wind_v10{lag}", f"current_uo{lag}", f"current_vo{lag}"])
+    
+    raw_env_cols = [c for c in raw_env_cols if c in train_df.columns]
+    
+    for c in raw_env_cols:
+        train_df[f"raw_{c}"] = train_df[c].copy()
+        if len(val_df) > 0: val_df[f"raw_{c}"] = val_df[c].copy()
+        if len(test_df) > 0: test_df[f"raw_{c}"] = test_df[c].copy()
 
     # Get feature columns (exclude non-feature columns)
     feature_cols = get_feature_columns(train_df)
@@ -385,21 +420,21 @@ def main():
     train_dataset = IcebergDriftDataset(
         train_df,
         feature_cols,
-        target_cols=['target_lat', 'target_lon'],
+        target_cols=['target_u', 'target_v'],
         sequence_length=config.model.ml_correction.prediction_horizon,
     )
 
     val_dataset = IcebergDriftDataset(
         val_df,
         feature_cols,
-        target_cols=['target_lat', 'target_lon'],
+        target_cols=['target_u', 'target_v'],
         sequence_length=config.model.ml_correction.prediction_horizon,
     ) if len(val_df) > 0 else None
 
     test_dataset = IcebergDriftDataset(
         test_df,
         feature_cols,
-        target_cols=['target_lat', 'target_lon'],
+        target_cols=['target_u', 'target_v'],
         sequence_length=config.model.ml_correction.prediction_horizon,
     ) if len(test_df) > 0 else None
 
@@ -408,7 +443,7 @@ def main():
         val_df,
         test_df,
         feature_cols,
-        target_cols=['target_lat', 'target_lon'],
+        target_cols=['target_u', 'target_v'],
         sequence_length=config.model.ml_correction.prediction_horizon,
         prediction_horizon=config.model.ml_correction.prediction_horizon,
         time_step_hours=6,
@@ -470,6 +505,7 @@ def main():
         optimizer=config.training.optimizer,
         scheduler=config.training.scheduler,
         scheduler_params=config.training.scheduler_params,
+        # BUG-012 Fix: Restore early stopping patience from config
         early_stopping_patience=config.training.early_stopping_patience,
         early_stopping_metric=config.training.early_stopping_metric,
         gradient_clip=config.training.gradient_clip,

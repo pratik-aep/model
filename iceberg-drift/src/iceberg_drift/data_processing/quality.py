@@ -206,10 +206,13 @@ def filter_coastal_nan(
 
     bath = bathymetry_ds["bathymetry"]
 
+    lat_arr = bath.latitude.values if hasattr(bath, "latitude") else bath.lat.values
+    lon_arr = bath.longitude.values if hasattr(bath, "longitude") else bath.lon.values
+
     # Create interpolator
     from scipy.interpolate import RegularGridInterpolator
     interp = RegularGridInterpolator(
-        (bath.latitude.values, bath.longitude.values),
+        (lat_arr, lon_arr),
         bath.values,
         method="linear",
         bounds_error=False,
@@ -391,15 +394,32 @@ def check_environmental_data_quality(
             total = ds[var].size
             report[name][f"{var}_nan_pct"] = 100 * nan_count / total
 
-    # Check temporal alignment
+    # Check temporal alignment (overlap of ranges)
     wind_times = wind_ds.time.values
     current_times = current_ds.time.values
-    common_times = np.intersect1d(wind_times, current_times)
+    
+    if len(wind_times) > 0 and len(current_times) > 0:
+        wind_min, wind_max = wind_times.min(), wind_times.max()
+        curr_min, curr_max = current_times.min(), current_times.max()
+        
+        overlap_min = max(wind_min, curr_min)
+        overlap_max = min(wind_max, curr_max)
+        
+        if overlap_max >= overlap_min:
+            wind_dur = float((wind_max - wind_min) / np.timedelta64(1, 's'))
+            curr_dur = float((curr_max - curr_min) / np.timedelta64(1, 's'))
+            overlap_dur = float((overlap_max - overlap_min) / np.timedelta64(1, 's'))
+            max_dur = max(wind_dur, curr_dur)
+            overlap_pct = 100 * overlap_dur / max_dur if max_dur > 0 else 100.0
+        else:
+            overlap_pct = 0.0
+    else:
+        overlap_pct = 0.0
+
     report["temporal_overlap"] = {
         "wind_times": len(wind_times),
         "current_times": len(current_times),
-        "common_times": len(common_times),
-        "overlap_pct": 100 * len(common_times) / max(len(wind_times), len(current_times)),
+        "overlap_pct": overlap_pct,
     }
 
     # BUG-007 fix: Add range and variance checks

@@ -127,23 +127,11 @@ class PhysicsInformedLoss(nn.Module):
         """
         batch_size, horizon, _ = predictions.shape
 
-        # Extract environmental forcings from inputs
-        # Use feature indices if provided, else fallback to last 4 columns
-        if self.feature_idx_map is not None:
-            current_u_idx = self.feature_idx_map['current_uo']
-            current_v_idx = self.feature_idx_map['current_vo']
-            wind_u_idx = self.feature_idx_map['wind_u10']
-            wind_v_idx = self.feature_idx_map['wind_v10']
-            current_u = inputs[:, -1, current_u_idx]
-            current_v = inputs[:, -1, current_v_idx]
-            wind_u = inputs[:, -1, wind_u_idx]
-            wind_v = inputs[:, -1, wind_v_idx]
-        else:
-            # Fallback to original indexing (last 4 columns)
-            current_u = inputs[:, -1, -4]
-            current_v = inputs[:, -1, -3]
-            wind_u = inputs[:, -1, -2]
-            wind_v = inputs[:, -1, -1]
+        # Extract raw environmental forcings from metadata (unscaled real values)
+        current_u = torch.tensor([m.get('raw_current_uo', 0.0) for m in metadata], device=device, dtype=torch.float32)
+        current_v = torch.tensor([m.get('raw_current_vo', 0.0) for m in metadata], device=device, dtype=torch.float32)
+        wind_u = torch.tensor([m.get('raw_wind_u10', 0.0) for m in metadata], device=device, dtype=torch.float32)
+        wind_v = torch.tensor([m.get('raw_wind_v10', 0.0) for m in metadata], device=device, dtype=torch.float32)
 
         # Get latitudes from metadata
         lats = torch.tensor([m.get('init_lat', -65.0) for m in metadata], device=device, dtype=torch.float32)
@@ -304,23 +292,11 @@ class PINNDriftModel(nn.Module):
         if metadata is None:
             metadata = [{'init_lat': -65.0, 'init_lon': 0.0}] * batch_size
 
-        # Extract current and wind from last timestep of input
-        # Use feature indices if provided, else fallback to last 4 columns (for backward compatibility)
-        if self.feature_idx_map is not None:
-            current_u_idx = self.feature_idx_map['current_uo']
-            current_v_idx = self.feature_idx_map['current_vo']
-            wind_u_idx = self.feature_idx_map['wind_u10']
-            wind_v_idx = self.feature_idx_map['wind_v10']
-            current_u = x[:, -1, current_u_idx]
-            current_v = x[:, -1, current_v_idx]
-            wind_u = x[:, -1, wind_u_idx]
-            wind_v = x[:, -1, wind_v_idx]
-        else:
-            # Fallback to original indexing (last 4 columns) - but this is likely wrong after feature engineering
-            current_u = x[:, -1, -4]
-            current_v = x[:, -1, -3]
-            wind_u = x[:, -1, -2]
-            wind_v = x[:, -1, -1]
+        # Extract raw environmental forcings from metadata (unscaled real values)
+        current_u = torch.tensor([m.get('raw_current_uo', 0.0) for m in metadata], device=device, dtype=torch.float32)
+        current_v = torch.tensor([m.get('raw_current_vo', 0.0) for m in metadata], device=device, dtype=torch.float32)
+        wind_u = torch.tensor([m.get('raw_wind_u10', 0.0) for m in metadata], device=device, dtype=torch.float32)
+        wind_v = torch.tensor([m.get('raw_wind_v10', 0.0) for m in metadata], device=device, dtype=torch.float32)
 
         lats = torch.tensor([m.get('init_lat', -65.0) for m in metadata], device=device, dtype=torch.float32)
         lons = torch.tensor([m.get('init_lon', 0.0) for m in metadata], device=device, dtype=torch.float32)

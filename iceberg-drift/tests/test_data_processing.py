@@ -47,20 +47,22 @@ class TestDownload:
 @pytest.fixture
 def sample_iceberg_df():
     np.random.seed(42)
-    n = 100
-    dates = pd.date_range("2020-01-01", periods=n, freq="6h")
-    iceberg_ids = ['ICE_001'] * 50 + ['ICE_002'] * 50
+    n = 150
+    dates = pd.date_range("2020-01-01", periods=50, freq="6h")
+    iceberg_ids = ['ICE_001'] * 50 + ['ICE_002'] * 50 + ['ICE_003'] * 50
     lats1 = -65 + np.cumsum(np.random.normal(0, 0.01, 50))
     lons1 = 0 + np.cumsum(np.random.normal(0, 0.01, 50))
     lats2 = -65 + np.cumsum(np.random.normal(0, 0.01, 50))
     lons2 = 0 + np.cumsum(np.random.normal(0, 0.01, 50))
+    lats3 = -65 + np.cumsum(np.random.normal(0, 0.01, 50))
+    lons3 = 0 + np.cumsum(np.random.normal(0, 0.01, 50))
     df = pd.DataFrame({
-        'iceberg_id': ['ICE_001'] * 50 + ['ICE_002'] * 50,
-        'datetime': np.concatenate([dates[:50], dates[:50]]),
-        'lat': np.concatenate([lats1, lats2]),
-        'lon': np.concatenate([lons1, lons2]),
-        'length_m': 2000,
-        'width_m': 1000,
+        'iceberg_id': iceberg_ids,
+        'datetime': np.concatenate([dates, dates, dates]),
+        'lat': np.concatenate([lats1, lats2, lats3]),
+        'lon': np.concatenate([lons1, lons2, lons3]),
+        'length_m': np.concatenate([np.full(50, 200.0), np.full(50, 300.0), np.full(50, 150.0)]),
+        'width_m': np.concatenate([np.full(50, 100.0), np.full(50, 150.0), np.full(50, 80.0)])
     })
     return df
 
@@ -165,6 +167,17 @@ class TestPreprocessing:
         assert train_ids.isdisjoint(val_ids)
         assert train_ids.isdisjoint(test_ids)
         assert val_ids.isdisjoint(test_ids)
+
+    def test_split_trajectories_small_counts(self):
+        """Test BUG-011: split_trajectories guarantees val and test sets for tiny datasets."""
+        import pandas as pd
+        from iceberg_drift.data_processing.preprocessing import split_trajectories
+        df = pd.DataFrame({
+            "iceberg_id": [1, 1, 2, 2, 3, 3, 4, 4]
+        })
+        train_df, val_df, test_df = split_trajectories(df, train_frac=0.7, val_frac=0.15, test_frac=0.15, strategy="trajectory")
+        assert val_df['iceberg_id'].nunique() >= 1
+        assert test_df['iceberg_id'].nunique() >= 1
 
     def test_feature_selection(self, sample_iceberg_df, sample_wind_ds, sample_current_ds):
         from iceberg_drift.data_processing import match_environmental_data, engineer_features, create_targets
