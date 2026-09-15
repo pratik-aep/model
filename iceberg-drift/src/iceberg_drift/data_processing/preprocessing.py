@@ -46,47 +46,82 @@ def match_environmental_data(
 
     logger.info(f"Matching environmental data to {len(iceberg_df)} iceberg positions")
 
-    # Create interpolators
-    wind_interpolators = _create_interpolators(wind_ds, wind_vars, "wind")
-    current_interpolators = _create_interpolators(current_ds, current_vars, "current", has_depth=True)
+    # Memory-bounded matching.
+    #
+    # The previous implementation built a global RegularGridInterpolator per
+    # variable, which calls ds[var].values and materialises the WHOLE array:
+    # ~2.1 GB per current variable and ~3.0 GB per wind variable for a full-year
+    # circumpolar file, ~10.4 GB in total before sortby makes copies. On a 16 GB
+    # machine that swaps and never finishes -- all to serve a few thousand point
+    # lookups.
+    #
+    # Instead: bucket the positions by the nearest time index and load only that
+    # 2D (lat, lon) slab, which is ~0.7 MB for wind and ~6 MB for currents.
+    #
+    # Time handling is nearest-neighbour rather than linear. Iceberg data is
+    # resampled to 6h and ERA5 is 6-hourly, so wind matches land exactly;
+    # currents are daily, where nearest is within half a day.
+    def _axis(ds, name):
+        v = ds[name].values
+        order = np.argsort(v)
+        return v[order], order
 
-    # Process each row
-    matched_data = []
+    def _nearest(sorted_vals, q):
+        idx = np.searchsorted(sorted_vals, q)
+        idx = np.clip(idx, 1, len(sorted_vals) - 1)
+        left = np.abs(q - sorted_vals[idx - 1]) <= np.abs(q - sorted_vals[idx])
+        return np.where(left, idx - 1, idx)
 
-    for _, row in tqdm(iceberg_df.iterrows(), total=len(iceberg_df), desc="Matching env data"):
-        # Cast timestamp to float (nanoseconds since epoch) to match the float coordinates
-        t = float(pd.Timestamp(row["datetime"]).value)
-        lat = row["lat"]
-        lon = row["lon"]
+    def _sample(ds, variables, prefix, out, has_depth=False):
+        if ds is None:
+            return
+        tname = "time" if "time" in ds.coords else (
+            "valid_time" if "valid_time" in ds.coords else None)
+        if tname is None or "latitude" not in ds.coords or "longitude" not in ds.coords:
+            logger.warning(f"{prefix}: missing time/lat/lon coords; skipping")
+            return
+        lat_s, lat_o = _axis(ds, "latitude")
+        lon_s, lon_o = _axis(ds, "longitude")
+        times = pd.DatetimeIndex(ds[tname].values)
+        t_order = np.argsort(times.asi8)
+        t_sorted = times.asi8[t_order]
 
-        # Match wind (surface)
-        wind_values = {}
-        for var, interp in wind_interpolators.items():
-            try:
-                val = interp((t, lat, lon))
-                wind_values[f"wind_{var}"] = float(val) if not np.isnan(val) else np.nan
-            except Exception as e:
-                logger.error(f"Failed to interp wind {var}: {e}")
-                wind_values[f"wind_{var}"] = np.nan
+        q_lat = iceberg_df["lat"].to_numpy(float)
+        q_lon = iceberg_df["lon"].to_numpy(float)
+        q_lon = np.where(q_lon > 180, q_lon - 360, q_lon)
+        q_t = pd.DatetimeIndex(iceberg_df["datetime"]).asi8
 
-        # Match currents (surface - depth=0)
-        current_values = {}
-        surface_depth = current_ds["depth"].values[0] if "depth" in current_ds.coords else 0.5
-        for var, interp in current_interpolators.items():
-            try:
-                val = interp((t, surface_depth, lat, lon))  # surface
-                
+        ti = t_order[_nearest(t_sorted, q_t)]
+        yi = lat_o[_nearest(lat_s, q_lat)]
+        xi = lon_o[_nearest(lon_s, q_lon)]
 
-                current_values[f"current_{var}"] = float(val) if not np.isnan(val) else np.nan
-            except Exception as e:
-                logger.error(f"Failed to interp current {var}: {e}")
-                current_values[f"current_{var}"] = np.nan
+        for var in variables:
+            if var not in ds:
+                logger.warning(f"Variable {var} not found in {prefix} dataset")
+                out[f"{prefix}_{var}"] = np.full(len(iceberg_df), np.nan)
+                continue
+            da = ds[var]
+            vals = np.full(len(iceberg_df), np.nan)
+            for k in np.unique(ti):
+                m = ti == k
+                sel = {tname: int(k)}
+                if has_depth and "depth" in da.dims:
+                    sel["depth"] = 0
+                slab = da.isel(sel).values          # one 2D slab only
+                vals[m] = slab[yi[m], xi[m]]
+                del slab
+            out[f"{prefix}_{var}"] = vals
 
-        # Combine
-        combined = {**row.to_dict(), **wind_values, **current_values}
-        matched_data.append(combined)
+    out_cols = {}
+    _sample(wind_ds, wind_vars, "wind", out_cols, has_depth=False)
+    _sample(current_ds, current_vars, "current", out_cols, has_depth=True)
 
-    result = pd.DataFrame(matched_data)
+    result = iceberg_df.copy().reset_index(drop=True)
+    for col, vals in out_cols.items():
+        result[col] = vals
+    matched_data = result   # keep the name used below
+
+    result = matched_data
     logger.info(f"Matched data shape: {result.shape}")
     return result
 

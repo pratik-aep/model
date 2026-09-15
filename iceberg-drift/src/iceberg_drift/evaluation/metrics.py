@@ -504,11 +504,25 @@ def _compute_skill_score(
 
         # Get metadata for each prediction
         # We need: current_uo, current_vo, wind_u10, wind_v10, init_lat for each sample
-        current_u = np.array([m.get('current_uo', 0.0) for m in metadata])
-        current_v = np.array([m.get('current_vo', 0.0) for m in metadata])
-        wind_u = np.array([m.get('wind_u10', 0.0) for m in metadata])
-        wind_v = np.array([m.get('wind_v10', 0.0) for m in metadata])
-        lats = np.array([m.get('init_lat', -65.0) for m in metadata])
+        # dataset.py stores these under a "raw_" prefix (raw_current_uo, ...).
+        # Reading the unprefixed name always missed, so every forcing defaulted to
+        # 0.0 and the physics baseline collapsed to 0 + 0.02*0 == the persistence
+        # baseline -- which is why skill_vs_physics and skill_vs_persistence came
+        # out byte-identical. Accept either spelling.
+        def _meta(m, name, default=0.0):
+            v = m.get(f"raw_{name}", m.get(name, default))
+            return default if v is None or (isinstance(v, float) and np.isnan(v)) else v
+
+        current_u = np.array([_meta(m, 'current_uo') for m in metadata])
+        current_v = np.array([_meta(m, 'current_vo') for m in metadata])
+        wind_u = np.array([_meta(m, 'wind_u10') for m in metadata])
+        wind_v = np.array([_meta(m, 'wind_v10') for m in metadata])
+        lats = np.array([_meta(m, 'init_lat', -65.0) for m in metadata])
+        if not np.any(current_u) and not np.any(wind_u):
+            logger.warning(
+                "Physics baseline: all forcing values are zero -- metadata is missing "
+                "raw_current_uo/raw_wind_u10. skill_vs_physics will equal "
+                "skill_vs_persistence and is not meaningful.")
 
         # Expand to match prediction shape if needed (similar to trainer.py logic)
         if len(current_u) != n_samples:

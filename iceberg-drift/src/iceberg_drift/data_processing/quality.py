@@ -147,6 +147,11 @@ def resample_iceberg_trajectory(
     Returns:
         Resampled DataFrame with regular time steps
     """
+    if df.empty or df["iceberg_id"].unique().size == 0:
+        import logging
+        logging.getLogger(__name__).warning("No icebergs survived quality filtering for this period - returning empty result")
+        return pd.DataFrame(columns=df.columns)
+        
     df = df.copy()
     df["datetime"] = pd.to_datetime(df["datetime"])
 
@@ -388,10 +393,29 @@ def check_environmental_data_quality(
             "lon": [float(ds.longitude.min()), float(ds.longitude.max())],
         }
 
-        # Check for NaN
+        # Check for NaN.
+        # ds[var].values materialises the whole array: a full-year circumpolar
+        # GLORYS file is ~2.1 GB per variable (569M cells), so counting NaN this
+        # way across uo/vo/thetao/so needs ~8.5 GB and gets the process OOM-killed.
+        # Accumulate over slices of the leading (time) dimension instead.
         for var in ds.data_vars:
-            nan_count = int(np.isnan(ds[var].values).sum())
-            total = ds[var].size
+            da = ds[var]
+            total = da.size
+            if total == 0:
+                report[name][f"{var}_nan_pct"] = 0.0
+                continue
+            lead = da.dims[0] if da.ndim else None
+            n = da.sizes[lead] if lead else 0
+            if lead is None or n == 0:
+                nan_count = int(np.isnan(da.values).sum())
+            else:
+                # cap each slab at roughly 128 MB of float32
+                per = max(1, int(128 * 1024**2 / max(1, (total // n) * 4)))
+                nan_count = 0
+                for i in range(0, n, per):
+                    blk = da.isel({lead: slice(i, i + per)}).values
+                    nan_count += int(np.isnan(blk).sum())
+                    del blk
             report[name][f"{var}_nan_pct"] = 100 * nan_count / total
 
     # Check temporal alignment (overlap of ranges)

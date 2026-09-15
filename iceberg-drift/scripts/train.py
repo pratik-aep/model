@@ -243,7 +243,7 @@ def main():
             start_date=iceberg_cfg.start_date,
             end_date=iceberg_cfg.end_date,
             bboxes=bboxes,
-            variables=["u10", "v10"],
+            variables=["10m_u_component_of_wind", "10m_v_component_of_wind"],
             allow_synthetic_fallback=True,
         )
         logger.info(f"Downloading Copernicus current data from {iceberg_cfg.start_date} to {iceberg_cfg.end_date}...")
@@ -253,7 +253,6 @@ def main():
             end_date=iceberg_cfg.end_date,
             bboxes=bboxes,
             variables=["uo", "vo"],
-            depth_levels=[0.0],
             allow_synthetic_fallback=True,
         )
 
@@ -266,7 +265,7 @@ def main():
 
     quality_pipeline = DataQualityPipeline(
         min_observations=10,
-        max_gap_hours=48,
+        max_gap_hours=200,  # Increased from 48 to accommodate data gaps (min observed max gap ~192h)
         max_speed_kmh=50.0,
         resample_freq="6h",
         coastal_depth_threshold=100.0,
@@ -283,6 +282,41 @@ def main():
             bathymetry_ds = bathymetry_ds.rename({'z': 'bathymetry'})
         logger.info(f"Loaded bathymetry from {bathy_path}")
 
+    # Crop forcing to the iceberg footprint before quality processing.
+    # The cached files are full-year circumpolar (GLORYS: 569M cells/variable,
+    # ~2.1 GB each). The quality pipeline's coastal NaN fill and NaN accounting
+    # operate on whole arrays, so passing the uncropped grid gets the process
+    # OOM-killed on a 16 GB machine. Icebergs occupy a small part of the domain,
+    # so crop to their bounds plus a buffer and drop variables the model never uses.
+    def _crop_to_icebergs(ds, label, buffer_deg=5.0, keep=None):
+        if ds is None or 'latitude' not in ds.coords or 'longitude' not in ds.coords:
+            return ds
+        before = sum(ds[v].size for v in ds.data_vars)
+        if keep:
+            drop = [v for v in ds.data_vars if v not in keep]
+            if drop:
+                ds = ds.drop_vars(drop)
+                logger.info(f"  {label}: dropped unused variables {drop}")
+        lat0 = float(iceberg_df['lat'].min()) - buffer_deg
+        lat1 = float(iceberg_df['lat'].max()) + buffer_deg
+        lon0 = float(iceberg_df['lon'].min()) - buffer_deg
+        lon1 = float(iceberg_df['lon'].max()) + buffer_deg
+        lat_asc = bool(ds.latitude[0] < ds.latitude[-1]) if ds.sizes.get('latitude', 0) > 1 else True
+        ds = ds.sel(latitude=slice(lat0, lat1) if lat_asc else slice(lat1, lat0))
+        # only crop longitude when the berg span is not effectively circumpolar
+        if (lon1 - lon0) < 300:
+            lon_asc = bool(ds.longitude[0] < ds.longitude[-1]) if ds.sizes.get('longitude', 0) > 1 else True
+            ds = ds.sel(longitude=slice(lon0, lon1) if lon_asc else slice(lon1, lon0))
+        after = sum(ds[v].size for v in ds.data_vars)
+        if before:
+            logger.info(f"  {label}: {before:,} -> {after:,} cells "
+                        f"({100 * after / before:.1f}% kept)")
+        return ds
+
+    logger.info("Cropping environmental data to iceberg footprint...")
+    wind_ds = _crop_to_icebergs(wind_ds, "wind", keep={"u10", "v10", "msl"})
+    current_ds = _crop_to_icebergs(current_ds, "currents", keep={"uo", "vo"})
+
     iceberg_df, wind_ds, current_ds = quality_pipeline.run(
         iceberg_df, wind_ds, current_ds, bathymetry_ds=bathymetry_ds
     )
@@ -290,7 +324,9 @@ def main():
     quality_summary = quality_pipeline.get_summary()
     iceberg_rep = quality_summary.get('iceberg_quality', {})
     env_rep = quality_summary.get('environmental_quality', {})
-    temp_rep = quality_summary.get('temporal_overlap', {})
+    # temporal_overlap is nested inside the environmental report, not top level;
+    # reading it from the top level always yielded the 0.0 default.
+    temp_rep = env_rep.get('temporal_overlap', quality_summary.get('temporal_overlap', {}))
     logger.info("Quality report summary:")
     logger.info(f"  Icebergs remaining: {iceberg_rep.get('final_icebergs', 0)} ({iceberg_rep.get('final_records', 0)} records)")
     logger.info(f"  Temporal overlap: {temp_rep.get('overlap_pct', 0.0):.1f}%")
@@ -381,6 +417,12 @@ def main():
         train_df[f"raw_{c}"] = train_df[c].copy()
         if len(val_df) > 0: val_df[f"raw_{c}"] = val_df[c].copy()
         if len(test_df) > 0: test_df[f"raw_{c}"] = test_df[c].copy()
+        
+    for c in ["current_uo", "current_vo", "wind_u10", "wind_v10"]:
+        if c in train_df.columns:
+            train_df[f"raw_{c}"] = train_df[c].copy()
+            if len(val_df) > 0: val_df[f"raw_{c}"] = val_df[c].copy()
+            if len(test_df) > 0: test_df[f"raw_{c}"] = test_df[c].copy()
 
     # Get feature columns (exclude non-feature columns)
     feature_cols = get_feature_columns(train_df)
