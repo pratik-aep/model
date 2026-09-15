@@ -1,6 +1,11 @@
 # Canonical configuration for real training runs (Jan-2015 BYU_LOCAL PINN)
 paths:
-  raw_data: data/raw
+  # data/ holds symlinks: data/data -> the real data root (year folders with
+  # ERA5/GLORYS), data/raw -> its raw/ subtree. Forcing lives in <root>/<year>/,
+  # so raw_data must point at data/data, not data -- otherwise the downloader
+  # looks in an empty iceberg-drift/data/<year>/ and re-downloads gigabytes
+  # that are already on disk.
+  raw_data: data/data
   processed_data: output/processed
   models: output/checkpoints
   results: output/results
@@ -8,10 +13,17 @@ paths:
 
 data_sources:
   iceberg_positions:
-    source: BYU_LOCAL
-    local_path: data/raw/iceberg_positions
+    # train.py ignores this field: it loads BYU + NIC from local_path and
+    # concatenates. local_path must be the DATA ROOT (data/ is a symlink to
+    # /Users/pratiksmac/Downloads/data); it appends /raw/iceberg_positions.
+    #
+    # Dates must fall in 2008-2018 -- the only years with valid circumpolar
+    # forcing. 2019-2026 ERA5/GLORYS landed on disjoint longitude sectors, so
+    # no row there can have both wind and currents.
+    source: NIC
+    local_path: data
     start_date: "2015-01-01"
-    end_date: "2015-01-31"
+    end_date: "2015-12-31"
     min_length_m: 100
   era5_wind:
     variable: 10m_wind

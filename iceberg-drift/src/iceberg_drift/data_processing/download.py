@@ -449,6 +449,22 @@ def _download_byu_icebergs(
 # =============================================================================
 
 
+def _resolve_cache_file(output_path: Path, stem: str) -> Optional[Path]:
+    """Find an existing cache file for `stem`, tolerating chunk suffixes.
+
+    Downloads are written either as "<stem>.nc" or, when the request was split,
+    as "<stem>_chunk0.nc". Without this the exact-name check misses an existing
+    full-domain file and silently re-downloads gigabytes from CDS/CMEMS.
+    """
+    exact = output_path / f"{stem}.nc"
+    if exact.exists():
+        return exact
+    chunks = sorted(output_path.glob(f"{stem}_chunk*.nc"))
+    if len(chunks) == 1:
+        return chunks[0]
+    return None
+
+
 def download_era5_wind(
     output_dir: str = "data/raw/era5",
     start_date: str = "2010-01-01",
@@ -474,6 +490,9 @@ def download_era5_wind(
     output_path.mkdir(parents=True, exist_ok=True)
 
     cache_file = output_path / f"era5_wind_{start_date}_{end_date}.nc"
+    _found = _resolve_cache_file(output_path, f"era5_wind_{start_date}_{end_date}")
+    if _found is not None:
+        cache_file = _found
 
     if cache_file.exists():
         logger.info(f"Loading cached ERA5 data from {cache_file}")
@@ -574,6 +593,9 @@ def download_copernicus_currents(
     output_path.mkdir(parents=True, exist_ok=True)
 
     cache_file = output_path / f"currents_{product}_{start_date}_{end_date}.nc"
+    _found = _resolve_cache_file(output_path, f"currents_{product}_{start_date}_{end_date}")
+    if _found is not None:
+        cache_file = _found
 
     if cache_file.exists():
         logger.info(f"Loading cached currents data from {cache_file}")
