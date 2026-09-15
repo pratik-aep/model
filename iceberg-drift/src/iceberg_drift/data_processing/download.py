@@ -76,6 +76,7 @@ def download_iceberg_positions(
     min_length_m: int = 100,
     source: str = "NIC",
     local_path: Optional[str] = None,
+    validated_only: bool = True,
 ) -> pd.DataFrame:
     """
     Download iceberg position data from NIC or BYU database.
@@ -104,7 +105,8 @@ def download_iceberg_positions(
     logger.info(f"Downloading {source} iceberg data from {start_date} to {end_date}")
 
     if source == "NIC":
-        df = _download_nic_icebergs(start_date, end_date, min_length_m, local_path)
+        df = _download_nic_icebergs(start_date, end_date, min_length_m, local_path,
+                                    validated_only=validated_only)
     elif source == "BYU":
         df = _download_byu_icebergs(start_date, end_date, min_length_m)
     elif source == "BYU_LOCAL":
@@ -248,63 +250,69 @@ def _load_byu_local_icebergs(
     for csv_file in tqdm(csv_files, desc="Parsing BYU Data"):
         try:
             df = pd.read_csv(csv_file)
-        except Exception as e:
-            continue
+            if df.empty or 'date' not in df.columns: continue
             
-        for _, row in df.iterrows():
-            try:
-                date_str = str(int(row['date']))
-                year = int(date_str[:4])
-                day = int(date_str[4:])
-                dt = pd.Timestamp(f"{year}-01-01") + pd.Timedelta(days=day-1)
-            except:
-                continue
+            dates_str = pd.to_numeric(df['date'], errors='coerce').fillna(0).astype(int).astype(str)
+            years = pd.to_numeric(dates_str.str[:4], errors='coerce').fillna(1900).astype(int)
+            days = pd.to_numeric(dates_str.str[4:], errors='coerce').fillna(1).astype(int)
+            
+            df['dt'] = pd.to_datetime(years.astype(str) + "-01-01", errors='coerce') + pd.to_timedelta(days - 1, unit='D')
+            df = df.dropna(subset=['dt'])
+            df = df[(df['dt'] >= start) & (df['dt'] <= end)]
+            if df.empty: continue
+            
+            if 'size_1' in df.columns:
+                df['length_m'] = pd.to_numeric(df['size_1'], errors='coerce') * 1852.0
+            else:
+                df['length_m'] = np.nan
+            if 'size_2' in df.columns:
+                df['width_m'] = pd.to_numeric(df['size_2'], errors='coerce') * 1852.0
+            else:
+                df['width_m'] = np.nan
                 
-            if dt < start or dt > end:
-                continue
-                
-            length_m, width_m = np.nan, np.nan
-            if 'size_1' in row and not pd.isna(row['size_1']) and float(row['size_1']) > 0:
-                length_m = float(row['size_1']) * 1852.0
-            if 'size_2' in row and not pd.isna(row['size_2']) and float(row['size_2']) > 0:
-                width_m = float(row['size_2']) * 1852.0
-                
-            lat, lon = np.nan, np.nan
+            df['parsed_lat'] = np.nan
+            df['parsed_lon'] = np.nan
+            
             for col in df.columns:
                 if col.endswith('_1') and col != 'size_1':
                     prefix = col[:-2]
                     col2 = f"{prefix}_2"
                     if col2 in df.columns:
-                        lat_val = float(row[col])
-                        lon_val = float(row[col2])
-                        if lat_val != 0.0 and lon_val != 0.0 and not np.isnan(lat_val):
-                            lat, lon = lat_val, lon_val
-                            break
-                            
-            if not np.isnan(lat) and (np.isnan(length_m) or length_m >= min_length_m):
-                records.append({
-                    'iceberg_id': csv_file.stem,
-                    'datetime': dt,
-                    'lat': lat,
-                    'lon': lon,
-                    'length_m': length_m,
-                    'width_m': width_m
+                        lat_v = pd.to_numeric(df[col], errors='coerce')
+                        lon_v = pd.to_numeric(df[col2], errors='coerce')
+                        mask = df['parsed_lat'].isna() & (lat_v != 0.0) & (lon_v != 0.0) & lat_v.notna() & lon_v.notna()
+                        df.loc[mask, 'parsed_lat'] = lat_v[mask]
+                        df.loc[mask, 'parsed_lon'] = lon_v[mask]
+            
+            valid_mask = df['parsed_lat'].notna() & (df['length_m'].isna() | (df['length_m'] >= min_length_m))
+            df = df[valid_mask]
+            if not df.empty:
+                df_out = pd.DataFrame({
+                    'iceberg_id': f"BYU_{csv_file.stem.upper()}",
+                    'datetime': df['dt'],
+                    'lat': df['parsed_lat'],
+                    'lon': df['parsed_lon'],
+                    'length_m': df['length_m'],
+                    'width_m': df['width_m']
                 })
-
+                records.append(df_out)
+        except Exception:
+            continue
+            
     if not records:
-        raise ValueError(f"No valid data loaded from {data_dir} for given dates.")
-
-    combined = pd.DataFrame(records)
-    combined = combined.sort_values(['iceberg_id', 'datetime']).reset_index(drop=True)
-
-    logger.info(f"Loaded {len(combined)} valid BYU records")
+        logger.warning(f"No valid BYU data loaded for given dates. Using synthetic.")
+        return _generate_synthetic_icebergs(start_date, end_date, min_length_m, source="BYU")
+        
+    combined = pd.concat(records, ignore_index=True)
     return combined
+
 
 def _download_nic_icebergs(
     start_date: str,
     end_date: str,
     min_length_m: int,
-    local_path: Optional[str] = None
+    local_path: Optional[str] = None,
+    validated_only: bool = True,
 ) -> pd.DataFrame:
     """
     Parse local US National Ice Center (NIC) iceberg reports.
@@ -321,61 +329,100 @@ def _download_nic_icebergs(
         logger.warning(f"No CSVs found in NIC path: {local_path}. Using synthetic.")
         return _generate_synthetic_icebergs(start_date, end_date, min_length_m, source="NIC")
         
-    logger.info(f"Parsing {len(csv_files)} NIC CSV files from {local_path}")
+    logger.info(f"Parsing {len(csv_files)} NIC CSV files from {local_path}"
+                f"{' (validated fixes only: nic_3 == 1)' if validated_only else ''}")
 
     start = pd.Timestamp(start_date)
     end = pd.Timestamp(end_date)
     records = []
+    n_dropped = 0
 
     for csv_file in tqdm(csv_files, desc="Parsing NIC Data"):
         try:
             df = pd.read_csv(csv_file)
+            if df.empty or 'date' not in df.columns: continue
+            
+            # nic_3 is the NIC OBSERVATION-VALIDITY FLAG, not a throwaway column.
+            # Rows with nic_3 == 0 repeat the previous fix (the source forward-fills
+            # between weekly observations): ~80.6% of raw rows. Keeping them makes
+            # consecutive positions identical, so any displacement/drift target built
+            # from them is identically zero. Real fixes arrive on a ~7-day cadence.
+            if validated_only and 'nic_3' in df.columns:
+                n_before = len(df)
+                df = df[pd.to_numeric(df['nic_3'], errors='coerce') == 1]
+                n_dropped += n_before - len(df)
+                if df.empty: continue
+
+            # NIC dates are YYYYDDD integers (year + day-of-year), e.g. 1991314 ->
+            # 1991-11-10. A bare pd.to_datetime() reads that integer as NANOSECONDS
+            # since epoch, turning every date into 1970-01-01; the date-range filter
+            # below then matches nothing and the caller silently falls back to
+            # SYNTHETIC data. Parse the day-of-year format explicitly.
+            raw_date = df['date']
+            dt = pd.to_datetime(pd.Series([], dtype=object))
+            num = pd.to_numeric(raw_date, errors='coerce')
+            ymd_mask = num.notna() & (num >= 1000000) & (num <= 9999999)
+            if ymd_mask.any():
+                dt = pd.to_datetime(
+                    num.where(ymd_mask).dropna().astype(int).astype(str),
+                    format='%Y%j', errors='coerce')
+            df['dt'] = pd.NaT
+            if len(dt):
+                df.loc[dt.index, 'dt'] = dt
+            # fall back to generic parsing for any rows not in YYYYDDD form
+            rest = df['dt'].isna()
+            if rest.any():
+                df.loc[rest, 'dt'] = pd.to_datetime(raw_date[rest], errors='coerce')
+            df = df.dropna(subset=['dt'])
+            df = df[(df['dt'] >= start) & (df['dt'] <= end)]
+            if df.empty: continue
+            
+            if 'size_1' in df.columns:
+                df['length_m'] = pd.to_numeric(df['size_1'], errors='coerce') * 1852.0
+            else:
+                df['length_m'] = np.nan
+            if 'size_2' in df.columns:
+                df['width_m'] = pd.to_numeric(df['size_2'], errors='coerce') * 1852.0
+            else:
+                df['width_m'] = np.nan
+                
+            df['parsed_lat'] = np.nan
+            df['parsed_lon'] = np.nan
+            
+            if 'nic_1' in df.columns and 'nic_2' in df.columns:
+                lat_v = pd.to_numeric(df['nic_1'], errors='coerce')
+                lon_v = pd.to_numeric(df['nic_2'], errors='coerce')
+                mask = (lat_v != 0.0) & (lon_v != 0.0) & lat_v.notna() & lon_v.notna()
+                df.loc[mask, 'parsed_lat'] = lat_v[mask]
+                df.loc[mask, 'parsed_lon'] = lon_v[mask]
+                
+            if 'lat' in df.columns and 'lon' in df.columns:
+                lat_v = pd.to_numeric(df['lat'], errors='coerce')
+                lon_v = pd.to_numeric(df['lon'], errors='coerce')
+                mask = df['parsed_lat'].isna() & (lat_v != 0.0) & (lon_v != 0.0) & lat_v.notna() & lon_v.notna()
+                df.loc[mask, 'parsed_lat'] = lat_v[mask]
+                df.loc[mask, 'parsed_lon'] = lon_v[mask]
+            
+            valid_mask = df['parsed_lat'].notna() & (df['length_m'].isna() | (df['length_m'] >= min_length_m))
+            df = df[valid_mask]
+            if not df.empty:
+                df_out = pd.DataFrame({
+                    'iceberg_id': f"NIC_{csv_file.stem.upper()}",
+                    'datetime': df['dt'],
+                    'lat': df['parsed_lat'],
+                    'lon': df['parsed_lon'],
+                    'length_m': df['length_m'],
+                    'width_m': df['width_m']
+                })
+                records.append(df_out)
         except Exception:
             continue
             
-        for _, row in df.iterrows():
-            try:
-                dt = pd.to_datetime(row['date'])
-            except:
-                continue
-                
-            if dt < start or dt > end:
-                continue
-                
-            length_m, width_m = np.nan, np.nan
-            if 'size_1' in row and not pd.isna(row['size_1']) and float(row['size_1']) > 0:
-                length_m = float(row['size_1']) * 1852.0
-            if 'size_2' in row and not pd.isna(row['size_2']) and float(row['size_2']) > 0:
-                width_m = float(row['size_2']) * 1852.0
-                
-            lat, lon = np.nan, np.nan
-            if 'nic_1' in row and 'nic_2' in row:
-                lat_val, lon_val = float(row['nic_1']), float(row['nic_2'])
-                if lat_val != 0.0 and lon_val != 0.0 and not np.isnan(lat_val):
-                    lat, lon = lat_val, lon_val
-            
-            if np.isnan(lat) and 'lat' in row and 'lon' in row:
-                lat_val, lon_val = float(row['lat']), float(row['lon'])
-                if lat_val != 0.0 and lon_val != 0.0 and not np.isnan(lat_val):
-                    lat, lon = lat_val, lon_val
-                        
-            if not np.isnan(lat) and (np.isnan(length_m) or length_m >= min_length_m):
-                records.append({
-                    'iceberg_id': f"NIC_{csv_file.stem.upper()}",
-                    'datetime': dt,
-                    'lat': lat,
-                    'lon': lon,
-                    'length_m': length_m,
-                    'width_m': width_m
-                })
-
     if not records:
         logger.warning(f"No valid NIC data loaded for given dates. Using synthetic.")
         return _generate_synthetic_icebergs(start_date, end_date, min_length_m, source="NIC")
-
-    combined = pd.DataFrame(records)
-    combined = combined.sort_values(['iceberg_id', 'datetime']).reset_index(drop=True)
-    logger.info(f"Loaded {len(combined)} valid NIC records")
+        
+    combined = pd.concat(records, ignore_index=True)
     return combined
 
 
@@ -410,7 +457,7 @@ def download_era5_wind(
     bboxes: List[Tuple[float, float, float, float]] = None,
     variables: List[str] = None,
     pressure_level: Optional[int] = None,
-    allow_synthetic_fallback: bool = True,
+    allow_synthetic_fallback: bool = False,
 ) -> xr.Dataset:
     if variables is None:
         variables = ["10m_u_component_of_wind", "10m_v_component_of_wind", "mean_sea_level_pressure"]
@@ -419,6 +466,11 @@ def download_era5_wind(
         bboxes = [bbox] if bbox else [(-180, -80, 180, -50)]
 
     output_path = Path(output_dir)
+    if output_path.name in ["era5", "copernicus"]:
+        output_path = output_path.parent
+    
+    year = start_date[:4]
+    output_path = output_path / year
     output_path.mkdir(parents=True, exist_ok=True)
 
     cache_file = output_path / f"era5_wind_{start_date}_{end_date}.nc"
@@ -476,9 +528,18 @@ def download_era5_wind(
         if not allow_synthetic_fallback: raise
         return _generate_synthetic_era5(start_date, end_date, bboxes, variables)
     except Exception as e:
+        error_details = str(e)
+        if hasattr(e, 'args') and e.args:
+            error_details += f" | Args: {e.args}"
+        if hasattr(e, 'response'):
+            try:
+                error_details += f" | Response: {e.response.text}"
+            except:
+                error_details += f" | Response: {e.response}"
+        
         if not allow_synthetic_fallback:
-            raise RuntimeError(f"ERA5 download failed: {e}") from e
-        logger.warning(f"ERA5 download failed: {e}. Generating synthetic data.")
+            raise RuntimeError(f"ERA5 download failed: {error_details}") from e
+        logger.warning(f"ERA5 download failed. Reason: {error_details}. Generating synthetic data.")
         return _generate_synthetic_era5(start_date, end_date, bboxes, variables)
 
 
@@ -491,13 +552,13 @@ def download_copernicus_currents(
     depth_levels: List[float] = None,
     variables: List[str] = None,
     product: str = "GLORYS12",
-    allow_synthetic_fallback: bool = True,
+    allow_synthetic_fallback: bool = False,
 ) -> xr.Dataset:
     """
     Download ocean current data from Copernicus Marine Service (CMEMS).
     """
     if depth_levels is None:
-        depth_levels = [0, 10, 50, 100, 200]
+        depth_levels = [0.49402499198913574, 10, 50, 100, 200]
     if variables is None:
         variables = ["uo", "vo", "thetao", "so"]
 
@@ -505,6 +566,11 @@ def download_copernicus_currents(
         bboxes = [bbox] if bbox else [(-180, -80, 180, -50)]
 
     output_path = Path(output_dir)
+    if output_path.name in ["era5", "copernicus"]:
+        output_path = output_path.parent
+    
+    year = start_date[:4]
+    output_path = output_path / year
     output_path.mkdir(parents=True, exist_ok=True)
 
     cache_file = output_path / f"currents_{product}_{start_date}_{end_date}.nc"
@@ -535,6 +601,16 @@ def download_copernicus_currents(
             "GLOBAL_ANALYSIS_FORECAST": "cmems_mod_glo_phy_anfc_0.083deg_P1D-m",
         }
         dataset_id = product_map.get(product, product_map["GLORYS12"])
+
+        # Dynamically switch dataset_id based on year if product is GLORYS12
+        if product in ("GLORYS12", "GLORYS"):
+            req_year = int(start_date.split("-")[0])
+            if req_year >= 2022:
+                dataset_id = "cmems_mod_glo_phy_anfc_0.083deg_P1D-m"
+                logger.info(f"Using ANFC dataset for year {req_year}")
+            else:
+                dataset_id = "cmems_mod_glo_phy_my_0.083deg_P1D-m"
+                logger.info(f"Using MY dataset for year {req_year}")
 
         chunks = []
         for i, box in enumerate(bboxes):
@@ -793,6 +869,10 @@ def _generate_synthetic_era5(
     """Generate synthetic ERA5-like data for development."""
     np.random.seed(42)
 
+    # Handle case where bboxes is a single tuple instead of list of tuples
+    if isinstance(bboxes, tuple):
+        bboxes = [bboxes]
+
     start = pd.Timestamp(start_date)
     end = pd.Timestamp(end_date)
     times = pd.date_range(start, end, freq="6h")
@@ -848,6 +928,10 @@ def _generate_synthetic_currents(
 ) -> xr.Dataset:
     """Generate synthetic ocean current data for development."""
     np.random.seed(123)
+
+    # Handle case where bboxes is a single tuple instead of list of tuples
+    if isinstance(bboxes, tuple):
+        bboxes = [bboxes]
 
     start = pd.Timestamp(start_date)
     end = pd.Timestamp(end_date)
