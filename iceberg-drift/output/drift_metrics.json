@@ -1,0 +1,300 @@
+{
+  "current_only": {
+    "RMSE_u": 0.07897571852722128,
+    "RMSE_v": 0.06906614972974752,
+    "MAE_u": 0.06221676637034696,
+    "MAE_v": 0.0514620649594857,
+    "pos_err_24h_km_mean": 7.634500031189257,
+    "pos_err_24h_km_rms": 9.064713617817514,
+    "skill_vs_2pct_RMSE_u": 0.5721315201956798,
+    "skill_vs_2pct_RMSE_v": 0.33507975634499754,
+    "skill_vs_2pct_pos_err_24h_km_rms": 0.5046451335890094
+  },
+  "two_percent_rule": {
+    "RMSE_u": 0.18457942628384252,
+    "RMSE_v": 0.10387132951479648,
+    "MAE_u": 0.1464941210679101,
+    "MAE_v": 0.08171999123717154,
+    "pos_err_24h_km_mean": 15.569818661526138,
+    "pos_err_24h_km_rms": 18.29943386545156,
+    "skill_vs_2pct_RMSE_u": 0.0,
+    "skill_vs_2pct_RMSE_v": 0.0,
+    "skill_vs_2pct_pos_err_24h_km_rms": 0.0
+  },
+  "persistence": {
+    "RMSE_u": 0.037971380553952834,
+    "RMSE_v": 0.04186866593665155,
+    "MAE_u": 0.014401904997654947,
+    "MAE_v": 0.01476843685555998,
+    "pos_err_24h_km_mean": 1.980014749470112,
+    "pos_err_24h_km_rms": 4.883557697900787,
+    "skill_vs_2pct_RMSE_u": 0.7942816200134829,
+    "skill_vs_2pct_RMSE_v": 0.596917974072072,
+    "skill_vs_2pct_pos_err_24h_km_rms": 0.7331306676584839
+  },
+  "linear": {
+    "RMSE_u": 0.03591788237854609,
+    "RMSE_v": 0.03331539871802701,
+    "MAE_u": 0.02010034523685051,
+    "MAE_v": 0.014855042175860844,
+    "pos_err_24h_km_mean": 2.40160970840025,
+    "pos_err_24h_km_rms": 4.232727152147684,
+    "skill_vs_2pct_RMSE_u": 0.8054069020492441,
+    "skill_vs_2pct_RMSE_v": 0.6792628064582419,
+    "skill_vs_2pct_pos_err_24h_km_rms": 0.7686962786242876
+  },
+  "gbm": {
+    "RMSE_u": 0.03425898784144175,
+    "RMSE_v": 0.031498612079727165,
+    "MAE_u": 0.014947541252045905,
+    "MAE_v": 0.012974628579907192,
+    "pos_err_24h_km_mean": 1.9046983317192432,
+    "pos_err_24h_km_rms": 4.020934595278323,
+    "skill_vs_2pct_RMSE_u": 0.8143943313120988,
+    "skill_vs_2pct_RMSE_v": 0.6967535485791565,
+    "skill_vs_2pct_pos_err_24h_km_rms": 0.7802700004359342
+  },
+  "linear_coefficients": {
+    "u_berg": {
+      "u_wind": 0.0004360271510256426,
+      "v_wind": 0.0012586336278498892,
+      "u_curr": 0.14463339105173664,
+      "v_curr": -0.028627603609334775
+    },
+    "v_berg": {
+      "u_wind": 0.0002783997026543372,
+      "v_wind": -0.0008012654242032541,
+      "u_curr": -0.0005523992037731914,
+      "v_curr": 0.08566802260598058
+    },
+    "intercept": {
+      "u_berg": -0.006371385502364909,
+      "v_berg": 0.004666618699423529
+    }
+  },
+  "_meta": {
+    "csv": "data/drift_trainable.csv",
+    "n_rows": 15124,
+    "n_bergs": 107,
+    "date_min": "2008-01-02",
+    "date_max": "2018-12-21",
+    "n_train": 10589,
+    "n_val": 2296,
+    "n_test": 2239,
+    "test_start": "2016-12-23",
+    "zero_frac_test": 0.5596248325145154,
+    "mean_gap_days": 5.5756413647183285
+  },
+  "mlp": {
+    "RMSE_u": 0.0310889333486557,
+    "RMSE_v": 0.03178751468658447,
+    "MAE_u": 0.014647089876234531,
+    "MAE_v": 0.015207996591925621,
+    "pos_err_24h_km_mean": 2.0485358238220215,
+    "pos_err_24h_km_rms": 3.8416125774383545,
+    "best_val_24h_km": 4.918592929840088,
+    "skill_vs_2pct_RMSE_u": 0.8315688049607015,
+    "skill_vs_2pct_RMSE_v": 0.6939721977655409,
+    "skill_vs_2pct_pos_err_24h_km_rms": 0.7900693209590963
+  },
+  "_free_drifting_subset": {
+    "current_only": {
+      "RMSE_u": 0.08761969927740884,
+      "RMSE_v": 0.07755912624033899,
+      "MAE_u": 0.06282430810671262,
+      "MAE_v": 0.054263159763566465,
+      "pos_err_24h_km_mean": 7.964849597633621,
+      "pos_err_24h_km_rms": 10.110140131954672,
+      "skill_vs_2pct_RMSE_u": 0.4337527107325292,
+      "skill_vs_2pct_RMSE_v": 0.3363987584360051,
+      "skill_vs_2pct_pos_err_24h_km_rms": 0.39656844754239784
+    },
+    "two_percent_rule": {
+      "RMSE_u": 0.1547375165199618,
+      "RMSE_v": 0.11687610176488723,
+      "MAE_u": 0.1187836953760522,
+      "MAE_v": 0.0935277193238194,
+      "pos_err_24h_km_mean": 14.478717925019039,
+      "pos_err_24h_km_rms": 16.75441082054625,
+      "skill_vs_2pct_RMSE_u": 0.0,
+      "skill_vs_2pct_RMSE_v": 0.0,
+      "skill_vs_2pct_pos_err_24h_km_rms": 0.0
+    },
+    "persistence": {
+      "RMSE_u": 0.07594585542927587,
+      "RMSE_v": 0.07333802576292456,
+      "MAE_u": 0.044061198466211905,
+      "MAE_v": 0.04342188531485241,
+      "pos_err_24h_km_mean": 5.964840400488873,
+      "pos_err_24h_km_rms": 9.121744796573223,
+      "skill_vs_2pct_RMSE_u": 0.5091955904599352,
+      "skill_vs_2pct_RMSE_v": 0.3725147856962723,
+      "skill_vs_2pct_pos_err_24h_km_rms": 0.4555615894659182
+    },
+    "linear": {
+      "RMSE_u": 0.0652751942140171,
+      "RMSE_v": 0.05590847080236646,
+      "MAE_u": 0.044418118339706485,
+      "MAE_v": 0.03387626624366631,
+      "pos_err_24h_km_mean": 5.316162298984598,
+      "pos_err_24h_km_rms": 7.425680703218533,
+      "skill_vs_2pct_RMSE_u": 0.5781553453742012,
+      "skill_vs_2pct_RMSE_v": 0.5216432618976783,
+      "skill_vs_2pct_pos_err_24h_km_rms": 0.5567924898849752
+    },
+    "gbm": {
+      "RMSE_u": 0.06265681974287798,
+      "RMSE_v": 0.05551743921770484,
+      "MAE_u": 0.038686236595090545,
+      "MAE_v": 0.034225646623037634,
+      "pos_err_24h_km_mean": 4.940527819886401,
+      "pos_err_24h_km_rms": 7.232904731173555,
+      "skill_vs_2pct_RMSE_u": 0.5950767392935701,
+      "skill_vs_2pct_RMSE_v": 0.5249889551468272,
+      "skill_vs_2pct_pos_err_24h_km_rms": 0.5682984732412251
+    },
+    "linear_coefficients": {
+      "u_berg": {
+        "u_wind": 0.002093407748134698,
+        "v_wind": -0.0001035790301021258,
+        "u_curr": 0.30611909651249863,
+        "v_curr": -0.013828950716065398
+      },
+      "v_berg": {
+        "u_wind": 0.0011487308134591316,
+        "v_wind": -0.0015702287749541184,
+        "u_curr": 0.004207468715206686,
+        "v_curr": 0.1332399937603868
+      },
+      "intercept": {
+        "u_berg": -0.02115264338186214,
+        "v_berg": 0.010138762241472591
+      }
+    },
+    "_meta": {
+      "csv": "data/drift_trainable_moving.csv",
+      "n_rows": 4860,
+      "n_bergs": 93,
+      "date_min": "2008-01-06",
+      "date_max": "2018-12-21",
+      "n_train": 3406,
+      "n_val": 727,
+      "n_test": 727,
+      "test_start": "2016-11-18",
+      "zero_frac_test": 0.0921595598349381,
+      "mean_gap_days": 6.999588477366255
+    },
+    "mlp": {
+      "RMSE_u": 0.057944171130657196,
+      "RMSE_v": 0.054215095937252045,
+      "MAE_u": 0.03595064580440521,
+      "MAE_v": 0.03360730782151222,
+      "pos_err_24h_km_mean": 4.731409549713135,
+      "pos_err_24h_km_rms": 6.856048107147217,
+      "best_val_24h_km": 7.273749828338623,
+      "skill_vs_2pct_RMSE_u": 0.6255324989451918,
+      "skill_vs_2pct_RMSE_v": 0.5361318942146671,
+      "skill_vs_2pct_pos_err_24h_km_rms": 0.5907914530339966
+    },
+    "constant_train_mean": {
+      "RMSE_u": 0.06856814418705598,
+      "RMSE_v": 0.057125243961109004,
+      "MAE_u": 0.0455967151042899,
+      "MAE_v": 0.03257924134882064,
+      "pos_err_24h_km_mean": 5.295883741447651,
+      "pos_err_24h_km_rms": 7.710871525312301,
+      "note": "Predicts the TRAIN-split mean displacement for every row. The honest floor: any model must beat THIS, not the 2% rule.",
+      "skill_vs_2pct_RMSE_u": 0.5568744689125833,
+      "skill_vs_2pct_RMSE_v": 0.5112324667020082,
+      "skill_vs_2pct_pos_err_24h_km_rms": 0.5397706545516769
+    }
+  },
+  "_provenance": {
+    "targets": "Built from real NIC fixes only (nic_3==1); prior table treated forward-filled rows as observations, zeroing 48.7% of displacements.",
+    "years_used": "2008-2018",
+    "years_excluded": {
+      "2004-2007": "no forcing files on disk",
+      "2009": "no valid observation pairs",
+      "2020": "GLORYS currents missing",
+      "2021-2026": "ERA5 wind and GLORYS currents cover DISJOINT longitude sectors - no row can have both",
+      "2019": "wind/current sectors overlap but only 29 berg-rows fall inside; dropped as out-of-distribution"
+    },
+    "coverage_masking": "points outside a file lat/lon range are excluded, not edge-clipped"
+  },
+  "constant_train_mean": {
+    "RMSE_u": 0.0367772576975258,
+    "RMSE_v": 0.03365857064619544,
+    "MAE_u": 0.018622524920461264,
+    "MAE_v": 0.012945481974655632,
+    "pos_err_24h_km_mean": 2.139395765264424,
+    "pos_err_24h_km_rms": 4.307424373324717,
+    "note": "Predicts the TRAIN-split mean displacement for every row. The honest floor: any model must beat THIS, not the 2% rule.",
+    "skill_vs_2pct_RMSE_u": 0.8007510455636021,
+    "skill_vs_2pct_RMSE_v": 0.6759589888430111,
+    "skill_vs_2pct_pos_err_24h_km_rms": 0.7646143369791935
+  },
+  "_diagnostics": {
+    "R2_test": {
+      "all_bergs": {
+        "u_berg": 0.073,
+        "v_berg": 0.116
+      },
+      "free_drifting": {
+        "u_berg": 0.017,
+        "v_berg": 0.03
+      }
+    },
+    "path_sampling_diagnostic": {
+      "n": 4829,
+      "corr_u_fixed": 0.318,
+      "corr_u_path": 0.372,
+      "corr_v_fixed": 0.215,
+      "corr_v_path": 0.25,
+      "slope_u_fixed": 0.348,
+      "slope_u_path": 0.447,
+      "note": "Sampling forcing along the observed drift path (diagnostic only - uses the endpoint) raises correlation but does not approach the theoretical 1.0."
+    },
+    "headline_caveat": "GBM/MLP beat the 2% rule by ~0.78 skill, but the 2% rule is WORSE THAN A CONSTANT here. Versus the constant baseline the models gain only ~5-7% RMSE. R2 is 0.02-0.12. Report as a negative result on forcing-based prediction, not as ML skill."
+  },
+  "_cross_validation": {
+    "method": "5-fold blocked time-series CV (expanding window, chronological, no shuffling)",
+    "mean_24h_km": {
+      "constant": 4.696,
+      "persistence": 5.11,
+      "two_percent_rule": 16.085,
+      "gbm": 4.012,
+      "two_stage": 4.009
+    },
+    "folds_beating_constant": {
+      "gbm": "5/5",
+      "two_stage": "5/5",
+      "persistence": "1/5",
+      "two_percent_rule": "0/5"
+    },
+    "note": "Across folds the model beats a constant baseline in 5/5 (mean -0.68 km, 14.5%). A single test split had suggested this was within noise; CV shows the gain is consistent and directional.",
+    "correction": "Persistence beats the constant in only 1/5 folds and is worse on average (+0.41 km). An earlier claim that persistence drove most of the ML gain was an artifact of the single split and is withdrawn."
+  },
+  "_hyperparameter_tuning": {
+    "selected": {
+      "learning_rate": 0.05,
+      "max_leaf_nodes": 15,
+      "max_iter": 100,
+      "l2": 0.0
+    },
+    "cv_mean": 3.986199800240904,
+    "default_cv_mean": 4.012436867652123,
+    "beats_default": "5/5 folds",
+    "note": "All top-5 configs used max_leaf_nodes=15 (not 31/63): weak signal favours shallower trees."
+  },
+  "_final_model": {
+    "file": "models/drift_twostage.pkl",
+    "test_24h_km_rms": 3.913,
+    "test_median_km": 0.186,
+    "within_10km_pct": 96.7,
+    "skill_vs_constant": 0.095,
+    "bootstrap_95CI_km": [
+      3.451,
+      4.483
+    ]
+  }
+}
